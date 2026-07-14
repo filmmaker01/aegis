@@ -15,11 +15,22 @@ where the **app** is. Current position: **end of foundation setup**.
 - Record real payloads; confirm/deny H1–H4; update findings docs.
 - **Gate:** decide go/no-go for "catch deletions + show saved content".
 
-## Phase 2 — MVP
-- Wire `initData` verifier into a Mini App auth middleware.
-- Backend webhook ingress (secret-token verified) + idempotent ingestion.
-- Minimal message archive + deletion notification with saved content.
-- Mini App: Dashboard + Deleted screens.
+## Phase 2 — MVP (in progress)
+Done:
+- ✅ `initData` verifier wired into a Mini App auth middleware (`/api/archive/*`).
+- ✅ Webhook ingress (secret-token verified) + idempotent, order-tolerant ingestion
+  (update_id claim, natural-key upserts, tombstone-first reconciliation).
+- ✅ Message archive (Prisma schema + Prisma repo + in-memory repo) with edit versioning.
+- ✅ Deletion notification with saved content (TelegramNotifier via Bot API sendMessage).
+- ✅ Mini App: Dashboard (overview counts) + Deleted (saved content) screens + API client.
+- ✅ Tested: 49 backend + 38 webapp tests; typecheck/lint/build green.
+
+Remaining before Phase 2 is "done":
+- ⏳ Prisma repository **integration test** against real Postgres (no Docker here; the
+  in-memory repo is the unit-tested reference — the Prisma repo is typechecked only).
+- ⏳ Media archival worker (download `getFile` → storage) — schema/ports exist, worker TBD.
+- ⏳ End-to-end run against the live bot (register webhook to the backend, connect, verify).
+- ⏳ Notification polish (quiet hours, batching, mute per chat).
 
 ## Phase 3 — Beta
 - Edited history, Chats/Settings/Subscription screens, billing, retention, legal review.
