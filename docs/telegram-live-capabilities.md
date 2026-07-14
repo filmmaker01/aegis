@@ -25,8 +25,9 @@ Bot: `@AegisArchive_bot` · captured 2026-07-14. Anonymized payloads:
 | E-3 | delete payload has **NO deletion timestamp** | ✅ | confirmed absent → use receipt time |
 | E-9 | batch delete = ONE update with `message_ids[]` array | ✅ | 112926901 — 22 ids in one update |
 | — | bot gets deletions for messages it NEVER archived (pre-connection history) | ✅ | 894/898/899/900/901 (ids 8xxxxx–9218xx, un-archived) |
-| E-2 | `edited_business_message` on edit | ❔ | pending (no edit sent yet) |
-| E-4 | partner "delete for me" produces NO event | ❔ | **not proven** — every delete so far produced an event; needs a controlled test |
+| E-2 | `edited_business_message` on edit | ✅ | 112926911, 112926913 |
+| E-2 | edit keeps same `message_id`, original `date`, adds `edit_date`, new `text` | ✅ | 935367: len 5→11, edit_date +2s |
+| E-4 | "delete for me" produces NO event (invisible to bot) | ✅ | msgs 935369/935370 sent, no `deleted_business_messages` followed (pending:0, no error) |
 | E-5 | photo delivered | ✅ | 112926902 (msg 935363) |
 | E-5 | `getFile` works AFTER delete + bytes downloadable | ✅ | photo download 200, 215365 B, valid JPEG |
 | E-6 | voice delivered (`audio/ogg`) + getFile after delete | ✅ | 112926904 (935364) |
@@ -72,7 +73,15 @@ Doing "delete for everyone" (the default) will always produce an event and does 
   ~20 MB download cap without a self-hosted API server).
 - video/document carry both `thumbnail` and legacy `thumb`.
 
-## Still pending (need user actions)
-- **E-2** edit (`edited_business_message`) — no edit performed yet.
-- **E-4** controlled "delete for me" — must delete a fresh message with "only for me" and
-  confirm NO event arrives.
+## E-2 / E-4 findings
+- **E-2 confirmed:** `edited_business_message` keeps the original `message_id` and `date`, adds
+  `edit_date`, and carries the new `text` — so a full version history is reconstructable by
+  storing each received version.
+- **E-4 confirmed:** after two fresh messages (935369, 935370) were deleted "only for me", NO
+  `deleted_business_messages` arrived (pipeline healthy: pending:0, no last_error). "Delete for
+  me" is invisible to the bot. → the product cannot capture partner-side self-deletions; only
+  "delete for everyone" (and anything removing the owner's copy) is observable.
+
+## All planned experiments complete
+E-1 ✅ · E-2 ✅ · E-3 ✅ · E-4 ✅ · E-5 ✅ · E-6 ✅ · E-7 ✅ · E-8 ✅ · E-9 ✅.
+See `telegram-live-payloads.md` for anonymized evidence.

@@ -154,3 +154,51 @@ resolved for ALL of them AFTER deletion, and the photo's bytes downloaded succes
 seconds–minutes after deletion; photo download returned the full bytes. → media stays
 retrievable at least shortly after deletion. Longevity beyond that is untested; Bot API
 download cap (~20 MB without a self-hosted API server) still applies to large files.
+
+## edited_business_message (E-2) — edit of msg 935367
+
+Same `message_id` as the original; original `date` preserved; new `edit_date` added; `text` updated. Full version history is reconstructable by keeping each received version.
+
+Original:
+```json
+{
+  "business_connection_id": "gPOd…<len:27>",
+  "message_id": 935367,
+  "from": {
+    "id": "<from.id>",
+    "is_bot": false,
+    "first_name": "<first>",
+    "username": "<username>"
+  },
+  "chat": {
+    "id": "<chat.id>",
+    "first_name": "<first>",
+    "username": "<username>",
+    "type": "private"
+  },
+  "date": 1784068656,
+  "text": "<text:5 chars>"
+}
+```
+Edited:
+```json
+{
+  "business_connection_id": "gPOd…<len:27>",
+  "message_id": 935367,
+  "from": {
+    "id": "<from.id>",
+    "is_bot": false,
+    "first_name": "<first>",
+    "username": "<username>"
+  },
+  "chat": {
+    "id": "<chat.id>",
+    "first_name": "<first>",
+    "username": "<username>",
+    "type": "private"
+  },
+  "date": 1784068656,
+  "edit_date": 1784068658,
+  "text": "<text:11 chars>"
+}
+```
