@@ -15,7 +15,8 @@ type CreateAppOptions = {
 
 export function createApp({ env, prisma }: CreateAppOptions) {
   const auth = createAuthModule({ db: prisma, env })
-  const archive = createArchiveModule({ env, db: prisma })
+  // Archive can run in-memory (temporary, lost on restart) when Postgres is unavailable.
+  const archive = createArchiveModule({ env, db: env.ARCHIVE_STORE === 'memory' ? undefined : prisma })
   const app = new OpenAPIHono<AuthHttpEnv>({
     defaultHook: validationErrorHook,
   })

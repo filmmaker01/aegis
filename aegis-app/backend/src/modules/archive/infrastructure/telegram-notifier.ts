@@ -9,23 +9,47 @@ export const noopNotifier: Notifier = {
  * Sends the owner a Telegram DM when a message is deleted, including the saved
  * content we archived on arrival. Uses the official Bot API sendMessage.
  */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 export class TelegramNotifier implements Notifier {
   constructor(
     private readonly botToken: string,
     private readonly apiRoot = 'https://api.telegram.org',
+    private readonly maxAttempts = 3,
   ) {}
 
+  /**
+   * Sends the deletion DM to the OWNER's chat with the bot (ownerTgChatId =
+   * business_connection.user_chat_id) — NOT the monitored chat.id. Retries a
+   * limited number of times on failure / 429 (honoring retry_after). Logs only
+   * safe diagnostics (message id, archived flag, http status) — no text/token/PII.
+   */
   async notifyDeletion(n: DeletionNotification): Promise<void> {
     const text = this.format(n)
-    const res = await fetch(`${this.apiRoot}/bot${this.botToken}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: n.ownerTgChatId, text, disable_web_page_preview: true }),
-    })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      console.error('[notifier] sendMessage failed', res.status, body.slice(0, 200))
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+      try {
+        const res = await fetch(`${this.apiRoot}/bot${this.botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: n.ownerTgChatId, text, disable_web_page_preview: true }),
+        })
+        if (res.ok) {
+          console.log(`[notify] message_id=${n.tgMessageId} archived=${n.archived} result=ok`)
+          return
+        }
+        let waitMs = 500 * attempt
+        if (res.status === 429) {
+          const body = (await res.json().catch(() => null)) as { parameters?: { retry_after?: number } } | null
+          if (body?.parameters?.retry_after) waitMs = body.parameters.retry_after * 1000
+        }
+        console.error(`[notify] message_id=${n.tgMessageId} archived=${n.archived} attempt=${attempt} status=${res.status}`)
+        if (attempt < this.maxAttempts) await sleep(waitMs)
+      } catch (err) {
+        console.error(`[notify] message_id=${n.tgMessageId} attempt=${attempt} error=${(err as Error).message}`)
+        if (attempt < this.maxAttempts) await sleep(500 * attempt)
+      }
     }
+    console.error(`[notify] message_id=${n.tgMessageId} result=FAILED after ${this.maxAttempts} attempts`)
   }
 
   private format(n: DeletionNotification): string {

@@ -46,6 +46,8 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: optionalStringSchema,
   TELEGRAM_WEBHOOK_SECRET: optionalStringSchema,
   TELEGRAM_INITDATA_MAX_AGE_SECONDS: z.coerce.number().int().positive().optional(),
+  // 'memory' runs the archive in-memory (data is lost on restart) when Postgres is unavailable.
+  ARCHIVE_STORE: z.enum(['memory', 'postgres']).optional(),
   COOKIE_SECURE: booleanStringSchema,
   SPACES_REGION: optionalStringSchema,
   SPACES_BUCKET: optionalStringSchema,

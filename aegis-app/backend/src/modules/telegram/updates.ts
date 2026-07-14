@@ -172,26 +172,36 @@ export async function dispatchUpdate(
 ): Promise<string | null> {
   if (typeof update.update_id !== 'number') return null
   const claimed = await ingest.claim(update.update_id)
-  if (!claimed) return 'duplicate'
+  if (!claimed) {
+    console.log(`[ingest] update_id=${update.update_id} type=duplicate (skipped)`)
+    return 'duplicate'
+  }
 
+  // Safe diagnostics only: type, update_id, message id(s). Never text/PII/tokens.
   if (update.business_connection) {
+    console.log(`[ingest] update_id=${update.update_id} type=business_connection`)
     const parsed = toIncomingConnection(update.business_connection)
     if (parsed) await ingest.onBusinessConnection(parsed)
     return 'business_connection'
   }
   if (update.business_message) {
+    console.log(`[ingest] update_id=${update.update_id} type=business_message message_id=${update.business_message.message_id}`)
     const parsed = toIncomingMessage(update.business_message)
     if (parsed) await ingest.onBusinessMessage(parsed)
     return 'business_message'
   }
   if (update.edited_business_message) {
+    console.log(`[ingest] update_id=${update.update_id} type=edited_business_message message_id=${update.edited_business_message.message_id}`)
     const parsed = toIncomingMessage(update.edited_business_message)
     if (parsed) await ingest.onEditedBusinessMessage(parsed)
     return 'edited_business_message'
   }
   if (update.deleted_business_messages) {
+    const ids = update.deleted_business_messages.message_ids ?? []
+    console.log(`[ingest] update_id=${update.update_id} type=deleted_business_messages count=${ids.length} message_ids=[${ids.join(',')}]`)
     await ingest.onDeletedBusinessMessages(toIncomingDeletion(update.deleted_business_messages))
     return 'deleted_business_messages'
   }
+  console.log(`[ingest] update_id=${update.update_id} type=ignored`)
   return 'ignored'
 }
