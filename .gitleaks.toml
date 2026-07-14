@@ -1,0 +1,17 @@
+# gitleaks configuration for the Aegis repository.
+# Extends the built-in ruleset and adds targeted allowlists for known-safe files.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe placeholders and fixtures (no real secrets)"
+paths = [
+  '''.*\.env\.example$''',
+  '''.*/tooling/.*''',          # local upstream checkouts (git-ignored anyway)
+]
+regexes = [
+  '''superuser:superpassword''',              # template LOCAL-ONLY dev DB creds
+  '''replace-with-at-least-32-random-characters''',
+  '''TEST_TOKEN_do_not_use_in_prod''',        # unit-test fixture token
+  '''wrong-password''',                        # auth test fixture
+]
