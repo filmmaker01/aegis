@@ -7,6 +7,13 @@ import type {
   StoredMessage,
 } from '../domain/types'
 import type { ArchiveRepository, SaveMessageVersionInput } from '../application/ports'
+import type {
+  ChatDto,
+  DeletedItemDto,
+  MessageDetailDto,
+  OverviewDto,
+  QueryRepository,
+} from '../application/query-ports'
 
 interface ConnRecord {
   connectionId: string
@@ -63,8 +70,8 @@ const chatKey = (c: string, chat: number) => `${c}:${chat}`
 const sigOf = (text?: string | null, editDate?: Date) =>
   `${text ?? ''}|${editDate ? editDate.getTime() : ''}`
 
-/** In-memory ArchiveRepository — used for tests and for local dev without Postgres. */
-export class InMemoryArchiveRepository implements ArchiveRepository {
+/** In-memory Archive + Query repository — for tests and local dev without Postgres. */
+export class InMemoryArchiveRepository implements ArchiveRepository, QueryRepository {
   readonly processed = new Set<number>()
   readonly connections = new Map<string, ConnRecord>()
   readonly chats = new Map<string, ChatRecord>()
@@ -234,6 +241,112 @@ export class InMemoryArchiveRepository implements ArchiveRepository {
   ): Promise<void> {
     const d = this.deletions.get(key(connectionId, tgChatId, tgMessageId))
     if (d) d.notifiedAt = at
+  }
+
+  // ── Query side ──────────────────────────────────────────────────────────────
+
+  private connectionIdsOf(ownerTgUserId: number): Set<string> {
+    const ids = new Set<string>()
+    for (const c of this.connections.values())
+      if (c.ownerTgUserId === ownerTgUserId) ids.add(c.connectionId)
+    return ids
+  }
+
+  async overview(ownerTgUserId: number): Promise<OverviewDto> {
+    const conns = this.connectionIdsOf(ownerTgUserId)
+    let messages = 0
+    let deleted = 0
+    let edited = 0
+    for (const m of this.messages.values()) {
+      if (!conns.has(m.connectionId)) continue
+      messages++
+      if (m.isDeleted) deleted++
+      if (m.isEdited) edited++
+    }
+    // Count deletion events too (includes un-archived deletions).
+    for (const d of this.deletions.values()) {
+      if (conns.has(d.connectionId) && !this.messages.get(key(d.connectionId, d.tgChatId, d.tgMessageId))?.isDeleted)
+        deleted++
+    }
+    let chats = 0
+    for (const c of this.chats.values()) if (conns.has(c.connectionId)) chats++
+    return { connections: conns.size, chats, messages, deleted, edited }
+  }
+
+  async listChats(ownerTgUserId: number): Promise<ChatDto[]> {
+    const conns = this.connectionIdsOf(ownerTgUserId)
+    const rows: ChatDto[] = []
+    for (const chat of this.chats.values()) {
+      if (!conns.has(chat.connectionId)) continue
+      let messageCount = 0
+      let deletedCount = 0
+      for (const m of this.messages.values()) {
+        if (m.connectionId === chat.connectionId && m.tgChatId === chat.tgChatId) {
+          messageCount++
+          if (m.isDeleted) deletedCount++
+        }
+      }
+      rows.push({
+        tgChatId: chat.tgChatId,
+        peerTitle: chat.peerTitle,
+        peerUsername: chat.peerUsername,
+        lastMessageAt: chat.lastMessageAt ? chat.lastMessageAt.toISOString() : null,
+        messageCount,
+        deletedCount,
+      })
+    }
+    rows.sort((a, b) => (b.lastMessageAt ?? '').localeCompare(a.lastMessageAt ?? ''))
+    return rows
+  }
+
+  async listDeleted(ownerTgUserId: number, limit: number): Promise<DeletedItemDto[]> {
+    const conns = this.connectionIdsOf(ownerTgUserId)
+    const rows: DeletedItemDto[] = []
+    for (const d of this.deletions.values()) {
+      if (!conns.has(d.connectionId)) continue
+      const m = this.messages.get(key(d.connectionId, d.tgChatId, d.tgMessageId))
+      const chat = this.chats.get(chatKey(d.connectionId, d.tgChatId))
+      rows.push({
+        tgChatId: d.tgChatId,
+        tgMessageId: d.tgMessageId,
+        peerLabel: chat?.peerTitle ?? chat?.peerUsername ?? null,
+        savedText: m?.currentText ?? null,
+        hasMedia: m?.hasMedia ?? false,
+        archived: m != null,
+        sentAt: m ? m.sentAt.toISOString() : null,
+        detectedAt: d.detectedAt.toISOString(),
+      })
+    }
+    rows.sort((a, b) => b.detectedAt.localeCompare(a.detectedAt))
+    return rows.slice(0, limit)
+  }
+
+  async getMessage(
+    ownerTgUserId: number,
+    tgChatId: number,
+    tgMessageId: number,
+  ): Promise<MessageDetailDto | null> {
+    const conns = this.connectionIdsOf(ownerTgUserId)
+    for (const connectionId of conns) {
+      const m = this.messages.get(key(connectionId, tgChatId, tgMessageId))
+      if (!m) continue
+      return {
+        tgChatId: m.tgChatId,
+        tgMessageId: m.tgMessageId,
+        direction: m.direction,
+        sentAt: m.sentAt.toISOString(),
+        currentText: m.currentText,
+        isEdited: m.isEdited,
+        isDeleted: m.isDeleted,
+        hasMedia: m.hasMedia,
+        versions: m.versions.map((v) => ({
+          versionNo: v.versionNo,
+          text: v.text,
+          editDate: v.editDate ? v.editDate.toISOString() : null,
+        })),
+      }
+    }
+    return null
   }
 }
 
