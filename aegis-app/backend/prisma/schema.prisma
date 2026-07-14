@@ -35,3 +35,129 @@ model AuthSession {
   @@index([expiresAt], map: "auth_sessions_expires_at_idx")
   @@map("auth_sessions")
 }
+
+// ─── Aegis archive (Phase 2 MVP) ──────────────────────────────────────────────
+// Stores messages on arrival so a deleted message's saved copy can be shown.
+// Telegram ids: user/chat ids can exceed 2^31 -> BigInt; message_id fits Int.
+
+model BusinessConnection {
+  id             String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  connectionId   String    @unique @map("connection_id") // Telegram business_connection_id
+  ownerTgUserId  BigInt    @map("owner_tg_user_id")
+  tgUserChatId   BigInt    @map("tg_user_chat_id")
+  state          String    @default("active") // active | disabled | revoked
+  rights         Json      @default("{}")
+  connectedAt    DateTime  @map("connected_at")
+  disconnectedAt DateTime? @map("disconnected_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  chats    Chat[]
+  messages ArchivedMessage[]
+  deletes  DeletedEvent[]
+
+  @@index([ownerTgUserId], map: "business_connections_owner_idx")
+  @@map("business_connections")
+}
+
+model Chat {
+  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  connectionId  String    @db.Uuid @map("connection_id")
+  tgChatId      BigInt    @map("tg_chat_id")
+  peerTitle     String?   @map("peer_title")
+  peerUsername  String?   @map("peer_username")
+  firstSeenAt   DateTime  @default(now()) @map("first_seen_at")
+  lastMessageAt DateTime? @map("last_message_at")
+
+  connection BusinessConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  messages   ArchivedMessage[]
+  deletes    DeletedEvent[]
+
+  @@unique([connectionId, tgChatId], map: "chats_connection_chat_key")
+  @@index([connectionId, lastMessageAt], map: "chats_connection_last_msg_idx")
+  @@map("chats")
+}
+
+model ArchivedMessage {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  connectionId String   @db.Uuid @map("connection_id")
+  chatId       String   @db.Uuid @map("chat_id")
+  tgMessageId  Int      @map("tg_message_id")
+  direction    String   // incoming | outgoing
+  fromTgId     BigInt?  @map("from_tg_id")
+  sentAt       DateTime @map("sent_at")
+  currentText  String?  @map("current_text")
+  hasMedia     Boolean  @default(false) @map("has_media")
+  isEdited     Boolean  @default(false) @map("is_edited")
+  isDeleted    Boolean  @default(false) @map("is_deleted")
+  receivedAt   DateTime @default(now()) @map("received_at")
+  raw          Json
+
+  connection   BusinessConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  chat         Chat               @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  versions     MessageVersion[]
+  media        Media[]
+  deletedEvent DeletedEvent?
+
+  @@unique([connectionId, chatId, tgMessageId], map: "messages_conn_chat_msg_key")
+  @@index([chatId, sentAt], map: "messages_chat_sent_idx")
+  @@index([connectionId, isDeleted], map: "messages_conn_deleted_idx")
+  @@map("messages")
+}
+
+model MessageVersion {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  messageId  String   @db.Uuid @map("message_id")
+  versionNo  Int      @map("version_no")
+  text       String?
+  editDate   DateTime? @map("edit_date")
+  capturedAt DateTime @default(now()) @map("captured_at")
+  raw        Json
+
+  message ArchivedMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, versionNo], map: "message_versions_msg_version_key")
+  @@map("message_versions")
+}
+
+model DeletedEvent {
+  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  connectionId  String   @db.Uuid @map("connection_id")
+  chatId        String   @db.Uuid @map("chat_id")
+  messageId     String?  @unique @db.Uuid @map("message_id")
+  tgMessageId   Int      @map("tg_message_id")
+  detectedAt    DateTime @default(now()) @map("detected_at")
+  notifiedAt    DateTime? @map("notified_at")
+
+  connection BusinessConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  chat       Chat               @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  message    ArchivedMessage?   @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@unique([connectionId, chatId, tgMessageId], map: "deleted_events_conn_chat_msg_key")
+  @@index([connectionId, detectedAt], map: "deleted_events_conn_detected_idx")
+  @@map("deleted_events")
+}
+
+model Media {
+  id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  messageId      String   @db.Uuid @map("message_id")
+  type           String   // photo | voice | video | video_note | audio | document | animation | sticker
+  tgFileId       String   @map("tg_file_id")
+  tgFileUniqueId String?  @map("tg_file_unique_id")
+  mimeType       String?  @map("mime_type")
+  sizeBytes      Int?     @map("size_bytes")
+  storageKey     String?  @map("storage_key")
+  state          String   @default("pending") // pending | stored | unavailable | purged
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  message ArchivedMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@map("media")
+}
+
+model ProcessedUpdate {
+  updateId    BigInt   @id @map("update_id")
+  processedAt DateTime @default(now()) @map("processed_at")
+
+  @@map("processed_updates")
+}
