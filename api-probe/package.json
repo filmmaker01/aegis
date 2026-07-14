@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "tunnel": "../tooling/cloudflared.exe tunnel --url http://localhost:3999 --no-autoupdate",
     "typecheck": "tsc --noEmit",
     "set-webhook": "tsx scripts/set-webhook.ts",
     "delete-webhook": "tsx scripts/delete-webhook.ts",

@@ -62,16 +62,19 @@ cp .env.example .env      # Windows PowerShell: copy .env.example .env
 npm run dev
 ```
 
-Терминал B — туннель на тот же порт:
+Терминал B — туннель на тот же порт. Проверенный вариант — портативный Cloudflare quick
+tunnel (без аккаунта). Бинарник лежит в `../tooling/cloudflared.exe` (скачивается один раз с
+официального релиза Cloudflare):
 ```bash
-# вариант ngrok
-ngrok http 3000
-# или cloudflared
-cloudflared tunnel --url http://localhost:3000
+npm run tunnel          # = ../tooling/cloudflared.exe tunnel --url http://localhost:3999
+# либо ngrok:  ngrok http 3999
 ```
 
-Скопируйте выданный `https://...` адрес в `PUBLIC_URL` в `.env` и перезапустите `npm run dev`
-(порт менять не нужно; меняется только публичный адрес туннеля).
+Скопируйте выданный `https://…trycloudflare.com` адрес в `PUBLIC_URL` в `.env`.
+> ⚠️ **URL quick-tunnel эфемерный** — он живёт только пока запущен процесс `cloudflared`.
+> Если туннель перезапустился, адрес сменится: обновите `PUBLIC_URL` и заново выполните
+> `npm run set-webhook`. Сервер (`npm run dev`) и туннель (`npm run tunnel`) должны оставаться
+> запущенными всё время, пока вы подключаете бота и проводите эксперименты.
 
 ## 5. Зарегистрировать webhook
 
