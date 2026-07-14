@@ -5,6 +5,7 @@ import { secureHeaders } from 'hono/secure-headers'
 import type { DbClient } from './db'
 import type { AppEnv } from './env'
 import { errorResponse, handleError, validationErrorHook } from './http/errors'
+import { createArchiveModule } from './modules/archive'
 import { createAuthModule, type AuthHttpEnv } from './modules/auth'
 
 type CreateAppOptions = {
@@ -14,6 +15,7 @@ type CreateAppOptions = {
 
 export function createApp({ env, prisma }: CreateAppOptions) {
   const auth = createAuthModule({ db: prisma, env })
+  const archive = createArchiveModule({ env, db: prisma })
   const app = new OpenAPIHono<AuthHttpEnv>({
     defaultHook: validationErrorHook,
   })
@@ -46,6 +48,10 @@ export function createApp({ env, prisma }: CreateAppOptions) {
   })
 
   app.route('/api/auth', auth.routes)
+
+  // Aegis: Telegram Business webhook ingress (secret-token verified) + Mini App read API (initData-auth)
+  app.route('/telegram/webhook', archive.webhookRoutes)
+  app.route('/api/archive', archive.readRoutes)
 
   app.doc('/openapi.json', {
     openapi: '3.0.0',
