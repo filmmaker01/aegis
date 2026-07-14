@@ -25,12 +25,17 @@ Done:
 - ✅ Mini App: Dashboard (overview counts) + Deleted (saved content) screens + API client.
 - ✅ Tested: 49 backend + 38 webapp tests; typecheck/lint/build green.
 
+Done (continued):
+- ✅ **Live e2e** against the bot: text deleted "for everyone" → owner received the DM with the
+  saved copy (self-heal via `getBusinessConnection`). Evidence: `../../docs/live-mvp-e2e.md`.
+- ✅ **PostgreSQL persistence**: Prisma repo integration-tested against real Postgres (5 tests,
+  `bun run test:pg`); backend switched to `ARCHIVE_STORE=postgres`; durability verified
+  (data survives a full backend restart). See `local-postgres.md`.
+
 Remaining before Phase 2 is "done":
-- ⏳ Prisma repository **integration test** against real Postgres (no Docker here; the
-  in-memory repo is the unit-tested reference — the Prisma repo is typechecked only).
 - ⏳ Media archival worker (download `getFile` → storage) — schema/ports exist, worker TBD.
-- ⏳ End-to-end run against the live bot (register webhook to the backend, connect, verify).
-- ⏳ Notification polish (quiet hours, batching, mute per chat).
+- ⏳ Formal Prisma migrations (currently `db push`) + managed Postgres for production.
+- ⏳ Notification polish (quiet hours, batching, mute per chat); optional edit notifications.
 
 ## Phase 3 — Beta
 - Edited history, Chats/Settings/Subscription screens, billing, retention, legal review.
