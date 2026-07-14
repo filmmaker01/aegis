@@ -3,12 +3,14 @@ import type {
   IncomingDeletion,
   IncomingMessage,
 } from '../domain/types'
-import type { ArchiveRepository, Clock, Notifier } from './ports'
+import type { ArchiveRepository, Clock, ConnectionFetcher, Notifier } from './ports'
 
 export interface IngestServiceDeps {
   repository: ArchiveRepository
   notifier: Notifier
   clock: Clock
+  /** Optional: resolves a connection on demand (Bot API getBusinessConnection) if not stored. */
+  connectionFetcher?: ConnectionFetcher
   /** Whether to notify the owner when a deletion has no archived content. Default true. */
   notifyUnarchivedDeletions?: boolean
 }
@@ -24,12 +26,14 @@ export class IngestService {
   private readonly repo: ArchiveRepository
   private readonly notifier: Notifier
   private readonly clock: Clock
+  private readonly connectionFetcher?: ConnectionFetcher
   private readonly notifyUnarchived: boolean
 
   constructor(deps: IngestServiceDeps) {
     this.repo = deps.repository
     this.notifier = deps.notifier
     this.clock = deps.clock
+    this.connectionFetcher = deps.connectionFetcher
     this.notifyUnarchived = deps.notifyUnarchivedDeletions ?? true
   }
 
@@ -114,8 +118,19 @@ export class IngestService {
     tgChatId: number,
     tgMessageId: number,
   ): Promise<void> {
-    const connection = await this.repo.getConnection(connectionId)
-    if (!connection) return
+    let connection = await this.repo.getConnection(connectionId)
+    if (!connection && this.connectionFetcher) {
+      // Self-heal: fetch the connection (user_chat_id) via the Bot API if we missed the event.
+      const fetched = await this.connectionFetcher.fetchConnection(connectionId)
+      if (fetched) {
+        await this.repo.upsertConnection(fetched)
+        connection = await this.repo.getConnection(connectionId)
+      }
+    }
+    if (!connection) {
+      console.error(`[notify] message_id=${tgMessageId} skipped=no_connection (user_chat_id unknown)`)
+      return
+    }
     const message = await this.repo.findMessage(connectionId, tgChatId, tgMessageId)
     const archived = message !== null
     if (!archived && !this.notifyUnarchived) return

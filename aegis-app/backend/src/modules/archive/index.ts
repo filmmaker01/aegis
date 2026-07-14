@@ -6,6 +6,7 @@ import type { QueryRepository } from './application/query-ports'
 import { QueryService } from './application/query-service'
 import { InMemoryArchiveRepository } from './infrastructure/in-memory-repository'
 import { PrismaArchiveRepository } from './infrastructure/prisma-archive-repository'
+import { TelegramConnectionFetcher } from './infrastructure/telegram-connection-fetcher'
 import { TelegramNotifier, noopNotifier } from './infrastructure/telegram-notifier'
 import { createReadRoutes } from './transport/read-routes'
 import { createWebhookRoutes } from '../telegram/transport/webhook-routes'
@@ -37,7 +38,11 @@ export function createArchiveModule({
   const resolvedNotifier =
     notifier ?? (env.TELEGRAM_BOT_TOKEN ? new TelegramNotifier(env.TELEGRAM_BOT_TOKEN) : noopNotifier)
 
-  const ingest = new IngestService({ repository, notifier: resolvedNotifier, clock })
+  const connectionFetcher = env.TELEGRAM_BOT_TOKEN
+    ? new TelegramConnectionFetcher(env.TELEGRAM_BOT_TOKEN)
+    : undefined
+
+  const ingest = new IngestService({ repository, notifier: resolvedNotifier, clock, connectionFetcher })
   const query = new QueryService(repository)
 
   const webhookRoutes = createWebhookRoutes({ ingest, webhookSecret: env.TELEGRAM_WEBHOOK_SECRET })

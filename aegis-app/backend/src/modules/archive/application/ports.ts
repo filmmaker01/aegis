@@ -105,3 +105,12 @@ export interface DeletionNotification {
 export interface Notifier {
   notifyDeletion(notification: DeletionNotification): Promise<void>
 }
+
+/**
+ * Resolves a business connection we haven't stored yet (e.g. the connection
+ * event was missed, or the store was reset). Backed by the Bot API
+ * getBusinessConnection method, which returns user_chat_id.
+ */
+export interface ConnectionFetcher {
+  fetchConnection(connectionId: string): Promise<IncomingBusinessConnection | null>
+}

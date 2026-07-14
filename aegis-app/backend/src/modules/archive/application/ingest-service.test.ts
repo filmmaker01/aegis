@@ -88,7 +88,41 @@ describe('IngestService', () => {
     expect(notifier.calls).toHaveLength(1)
     expect(notifier.calls[0]?.archived).toBe(true)
     expect(notifier.calls[0]?.savedText).toBe('secret text')
+    // Notification MUST target the owner's user_chat_id, NOT the monitored chat.id.
     expect(notifier.calls[0]?.ownerTgChatId).toBe(OWNER_CHAT)
+    expect(notifier.calls[0]?.ownerTgChatId).not.toBe(CHAT)
+  })
+
+  test('self-heals via connection fetcher when connection was never stored, routing to user_chat_id', async () => {
+    const freshRepo = new InMemoryArchiveRepository(() => fixedNow)
+    const freshNotifier = new RecordingNotifier()
+    const fetcher = {
+      fetchConnection: async (connectionId: string) => ({
+        connectionId,
+        ownerTgUserId: 700,
+        tgUserChatId: OWNER_CHAT, // 700, distinct from CHAT (5001)
+        rights: {},
+        isEnabled: true,
+        connectedAt: fixedNow,
+      }),
+    }
+    const freshSvc = new IngestService({
+      repository: freshRepo,
+      notifier: freshNotifier,
+      clock: { now: () => fixedNow },
+      connectionFetcher: fetcher,
+    })
+
+    // NOTE: onBusinessConnection is intentionally NOT called (connection unknown).
+    await freshSvc.onBusinessMessage(msg(1, 'recovered text'))
+    await freshSvc.onDeletedBusinessMessages({ connectionId: CONN, tgChatId: CHAT, tgMessageIds: [1] })
+
+    expect(freshNotifier.calls).toHaveLength(1)
+    expect(freshNotifier.calls[0]?.savedText).toBe('recovered text')
+    expect(freshNotifier.calls[0]?.ownerTgChatId).toBe(OWNER_CHAT)
+    expect(freshNotifier.calls[0]?.ownerTgChatId).not.toBe(CHAT)
+    // connection was persisted for subsequent use
+    expect((await freshRepo.getConnection(CONN))?.tgUserChatId).toBe(OWNER_CHAT)
   })
 
   test('duplicate deletion event notifies only once', async () => {
