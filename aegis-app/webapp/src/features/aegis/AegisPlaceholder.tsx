@@ -1,4 +1,7 @@
+import { Link } from '@tanstack/react-router'
+
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Card,
   CardContent,
@@ -54,6 +57,15 @@ export function AegisPlaceholder() {
           ) : null}
         </CardContent>
       </Card>
+
+      <div className="flex flex-wrap gap-3">
+        <Button asChild>
+          <Link to="/aegis/dashboard">Open dashboard</Link>
+        </Button>
+        <Button asChild variant="outline">
+          <Link to="/aegis/deleted">Deleted messages</Link>
+        </Button>
+      </div>
     </section>
   )
 }
