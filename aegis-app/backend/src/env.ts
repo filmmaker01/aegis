@@ -45,7 +45,7 @@ const envSchema = z.object({
   // Aegis / Telegram (optional in dev; required to run the webhook + Mini App auth)
   TELEGRAM_BOT_TOKEN: optionalStringSchema,
   TELEGRAM_WEBHOOK_SECRET: optionalStringSchema,
-  TELEGRAM_INITDATA_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(3600),
+  TELEGRAM_INITDATA_MAX_AGE_SECONDS: z.coerce.number().int().positive().optional(),
   COOKIE_SECURE: booleanStringSchema,
   SPACES_REGION: optionalStringSchema,
   SPACES_BUCKET: optionalStringSchema,
