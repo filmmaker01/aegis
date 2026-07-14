@@ -23,9 +23,11 @@ Bot: `@AegisArchive_bot` · captured 2026-07-14. Anonymized payloads:
 | E-3 | delete payload has **NO deleted content** | ✅ | confirmed absent |
 | E-3 | delete payload has **NO initiator** (who deleted) | ✅ | confirmed absent → attribution impossible |
 | E-3 | delete payload has **NO deletion timestamp** | ✅ | confirmed absent → use receipt time |
+| E-9 | batch delete = ONE update with `message_ids[]` array | ✅ | 112926901 — 22 ids in one update |
+| — | bot gets deletions for messages it NEVER archived (pre-connection history) | ✅ | 894/898/899/900/901 (ids 8xxxxx–9218xx, un-archived) |
 | E-2 | `edited_business_message` on edit | ❔ | pending (no edit sent yet) |
-| E-4 | partner "delete for me" reaches the bot | ❔ | pending |
-| E-5 | photo delivered + `getFile` after delete | ❔ | pending |
+| E-4 | partner "delete for me" produces NO event | ❔ | **not proven** — every delete so far produced an event; needs a controlled test |
+| E-5 | photo delivered + `getFile` after delete | ❔ | pending (no media sent yet) |
 | E-6 | voice delivered | ❔ | pending |
 | E-7 | video / video_note delivered | ❔ | pending |
 | E-8 | document delivered | ❔ | pending |
@@ -44,5 +46,23 @@ Bot: `@AegisArchive_bot` · captured 2026-07-14. Anonymized payloads:
 - A **read-only archiver needs no rights** to receive+archive; rights are only needed if we
   later want to reply, mark-as-read, or delete.
 
+## New findings (2nd batch)
+- **E-9 confirmed:** a bulk delete arrives as **one** `deleted_business_messages` with all
+  ids in `message_ids[]` (observed 22 ids in a single update) — group notifications/idempotency
+  must handle arrays, not assume one-id-per-update.
+- **Pre-connection deletions:** the bot receives `deleted_business_messages` for messages it
+  **never archived** (ids far below the first message we saw — old chat history the partner
+  deleted). For those the product can only show "a message was deleted, content not in your
+  archive." This is an inherent gap of store-on-arrival.
+
+## E-4 status — NOT proven yet
+Every deletion so far produced an event, so "delete for me is invisible" is **unconfirmed**.
+Presence of events cannot prove the negative. Clean test needed:
+1. Partner (2nd account) sends ONE new message; confirm a `business_message` arrives.
+2. Partner deletes it with **"Delete only for me"** (not "for everyone").
+3. Expect **NO** `deleted_business_messages`. Wait ~60s; if nothing arrives → E-4 confirmed.
+Doing "delete for everyone" (the default) will always produce an event and does not test E-4.
+
 ## Still pending (need user actions)
-E-2 edit · E-4 "delete for me" · E-5 photo · E-6 voice · E-7 video · E-8 document.
+E-2 edit · E-4 controlled "delete for me" · E-5 photo · E-6 voice · E-7 video · E-8 document.
+Note: no media has been sent yet — all captured messages were text.

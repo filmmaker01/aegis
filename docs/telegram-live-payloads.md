@@ -98,3 +98,43 @@ Contains ONLY `business_connection_id`, `chat`, `message_ids[]`. NO content, NO 
   ]
 }
 ```
+
+## deleted_business_messages (E-9) — BATCH delete (22 ids in ONE update)
+
+Deleting many messages at once produces a SINGLE update with an array of message_ids (not many updates). Most of these ids were NEVER archived by the bot (they predate the connection) — the bot is notified of deletions it has no saved copy for.
+
+```json
+{
+  "business_connection_id": "gPOd…<len:27>",
+  "chat": {
+    "id": "<chat.id>",
+    "first_name": "<first_name>",
+    "username": "<username>",
+    "type": "private"
+  },
+  "message_ids": [
+    831694,
+    845455,
+    845456,
+    887456,
+    887457,
+    887458,
+    887459,
+    887460,
+    887461,
+    887462,
+    887463,
+    887464,
+    887465,
+    887466,
+    887467,
+    887468,
+    921803,
+    921804,
+    921805,
+    921806,
+    921807,
+    921808
+  ]
+}
+```
