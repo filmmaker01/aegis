@@ -1,0 +1,84 @@
+name: REPLACE_WITH_PROJECT_SLUG-api
+region: REPLACE_WITH_DO_APP_REGION
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+databases:
+  - name: REPLACE_WITH_DO_DB_COMPONENT_NAME
+    engine: PG
+    production: true
+    cluster_name: REPLACE_WITH_DO_DB_CLUSTER_NAME
+    db_name: REPLACE_WITH_DO_DB_NAME
+    db_user: REPLACE_WITH_DO_DB_USER
+services:
+  - name: api
+    github:
+      repo: REPLACE_WITH_GITHUB_REPO
+      branch: REPLACE_WITH_GIT_BRANCH
+      deploy_on_push: true
+    source_dir: /
+    dockerfile_path: backend/Dockerfile
+    http_port: 8080
+    instance_size_slug: REPLACE_WITH_DO_API_INSTANCE_SIZE_SLUG
+    instance_count: REPLACE_WITH_DO_API_INSTANCE_COUNT
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 10
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 5
+    liveness_health_check:
+      http_path: /health
+      initial_delay_seconds: 30
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 5
+    envs:
+      - key: PORT
+        value: "8080"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: DATABASE_URL
+        value: "${REPLACE_WITH_DO_DB_COMPONENT_NAME.DATABASE_URL}"
+        scope: RUN_TIME
+        type: SECRET
+      - key: JWT_SECRET
+        value: "REPLACE_WITH_AT_LEAST_32_RANDOM_CHARS"
+        scope: RUN_TIME
+        type: SECRET
+      - key: CORS_ORIGINS
+        value: "https://REPLACE_WITH_WEBAPP_DEFAULT_INGRESS"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: ACCESS_TOKEN_TTL_SECONDS
+        value: "900"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: REFRESH_TOKEN_TTL_DAYS
+        value: "30"
+        scope: RUN_TIME
+        type: GENERAL
+      - key: COOKIE_SECURE
+        value: "true"
+        scope: RUN_TIME
+        type: GENERAL
+REPLACE_WITH_OPTIONAL_BACKEND_WORKERS
+jobs:
+  - name: migrate
+    kind: PRE_DEPLOY
+    github:
+      repo: REPLACE_WITH_GITHUB_REPO
+      branch: REPLACE_WITH_GIT_BRANCH
+      deploy_on_push: true
+    source_dir: /
+    dockerfile_path: backend/Dockerfile
+    run_command: bun run prisma:deploy
+    instance_count: 1
+    envs:
+      - key: DATABASE_URL
+        value: "${REPLACE_WITH_DO_DB_COMPONENT_NAME.DATABASE_URL}"
+        scope: RUN_TIME
+        type: SECRET
+REPLACE_WITH_OPTIONAL_BACKEND_CRON_JOBS

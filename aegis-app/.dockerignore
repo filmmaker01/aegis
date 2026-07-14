@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+dist
+**/dist
+build
+coverage
+.git
+.scratch
+.env
+.env.*
+!.env.example
+webapp/e2e/.artifacts
+mobile/.maestro/reports
+*.log
