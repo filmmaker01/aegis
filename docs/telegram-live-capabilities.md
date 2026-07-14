@@ -27,10 +27,11 @@ Bot: `@AegisArchive_bot` · captured 2026-07-14. Anonymized payloads:
 | — | bot gets deletions for messages it NEVER archived (pre-connection history) | ✅ | 894/898/899/900/901 (ids 8xxxxx–9218xx, un-archived) |
 | E-2 | `edited_business_message` on edit | ❔ | pending (no edit sent yet) |
 | E-4 | partner "delete for me" produces NO event | ❔ | **not proven** — every delete so far produced an event; needs a controlled test |
-| E-5 | photo delivered + `getFile` after delete | ❔ | pending (no media sent yet) |
-| E-6 | voice delivered | ❔ | pending |
-| E-7 | video / video_note delivered | ❔ | pending |
-| E-8 | document delivered | ❔ | pending |
+| E-5 | photo delivered | ✅ | 112926902 (msg 935363) |
+| E-5 | `getFile` works AFTER delete + bytes downloadable | ✅ | photo download 200, 215365 B, valid JPEG |
+| E-6 | voice delivered (`audio/ogg`) + getFile after delete | ✅ | 112926904 (935364) |
+| E-7 | video delivered (`video/mp4`, thumbnail+thumb) + getFile after delete | ✅ | 112926906 (935365) |
+| E-8 | document delivered (`file_name`, mime) + getFile after delete | ✅ | 112926908 (935366) |
 
 ## Resolved
 - **Empty-rights receipt question (was НЕ ПОДТВЕРЖДЕНО):** RESOLVED. `business_message`
@@ -63,6 +64,15 @@ Presence of events cannot prove the negative. Clean test needed:
 3. Expect **NO** `deleted_business_messages`. Wait ~60s; if nothing arrives → E-4 confirmed.
 Doing "delete for everyone" (the default) will always produce an event and does not test E-4.
 
+## Media findings (E-5..E-8)
+- All four types (photo, voice, video, document) delivered as normal `business_message`.
+- **`getFile` resolves AFTER deletion** for all four; the photo's bytes downloaded fully
+  (200, exact size, valid JPEG). → archival can even recover a file shortly after deletion,
+  though download-at-arrival remains the safe strategy (post-delete longevity untested; Bot API
+  ~20 MB download cap without a self-hosted API server).
+- video/document carry both `thumbnail` and legacy `thumb`.
+
 ## Still pending (need user actions)
-E-2 edit · E-4 controlled "delete for me" · E-5 photo · E-6 voice · E-7 video · E-8 document.
-Note: no media has been sent yet — all captured messages were text.
+- **E-2** edit (`edited_business_message`) — no edit performed yet.
+- **E-4** controlled "delete for me" — must delete a fresh message with "only for me" and
+  confirm NO event arrives.

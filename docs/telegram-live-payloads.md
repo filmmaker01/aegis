@@ -138,3 +138,19 @@ Deleting many messages at once produces a SINGLE update with an array of message
   ]
 }
 ```
+
+## Media messages (E-5..E-8) — field shapes & getFile-after-delete
+
+All four media types were delivered as normal `business_message`, then deleted. `getFile`
+resolved for ALL of them AFTER deletion, and the photo's bytes downloaded successfully
+(200, 215365 bytes, valid JPEG). Media `file_id` values are omitted below (bot-scoped tokens).
+
+- **photo** (msg 935363): `photo[]` (size variants) → `file_id, file_unique_id, file_size, width, height`. 1280x714, 215365 B.
+- **voice** (935364): `voice{ duration, mime_type=audio/ogg, file_id, file_unique_id, file_size }`. 3s, 12316 B.
+- **video** (935365): `video{ duration, width, height, file_name, mime_type=video/mp4, thumbnail{…}, thumb{…}, file_id, file_unique_id, file_size }`. 9s, 5.1 MB. (both `thumbnail` and legacy `thumb` present)
+- **document** (935366): `document{ file_name, mime_type=image/png, thumbnail{…}, thumb{…}, file_id, file_unique_id, file_size }`. 195880 B.
+
+**getFile after delete:** photo/voice/video/document all returned `ok:true` with a `file_path`
+seconds–minutes after deletion; photo download returned the full bytes. → media stays
+retrievable at least shortly after deletion. Longevity beyond that is untested; Bot API
+download cap (~20 MB without a self-hosted API server) still applies to large files.
