@@ -1,5 +1,6 @@
 import { createRootRoute, createRoute, createRouter } from '@tanstack/react-router'
 
+import { AegisPlaceholder } from './features/aegis/AegisPlaceholder'
 import { AppPage, HomePage, RootLayout } from './pages'
 
 const rootRoute = createRootRoute({
@@ -18,7 +19,13 @@ const appRoute = createRoute({
   component: AppPage,
 })
 
-const routeTree = rootRoute.addChildren([indexRoute, appRoute])
+const aegisRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/aegis',
+  component: AegisPlaceholder,
+})
+
+const routeTree = rootRoute.addChildren([indexRoute, appRoute, aegisRoute])
 
 export const router = createRouter({ routeTree })
 

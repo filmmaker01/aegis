@@ -71,17 +71,6 @@
 - Do not add empty layers, generic/base repositories, CQRS, event sourcing, or state-machine libraries without a concrete product need.
 - Do not move business rules into routes, screens, providers, or UI primitives to avoid defining the owning application/domain boundary.
 
-## Bootstrap-Only Instructions
-
-<!-- BOOTSTRAP_ONLY_START -->
-This block exists only for fresh installs from the template. If this repository has not been initialized for a real project yet:
-
-- Read `README.md`, especially `Agent Repo Download Instructions`, before setup or feature work.
-- Follow that README section for product intake, active/deferred surfaces, repository remote handling, Docker/PostgreSQL setup, deployment scope, Expo/EAS owner setup, and mobile Maestro dev-client setup when mobile E2E is active.
-- Record durable project choices in README files and docs, not in `AGENTS.md` or `CLAUDE.md`.
-- After first-run setup is complete, delete this entire `Bootstrap-Only Instructions` block from both `AGENTS.md` and `CLAUDE.md`.
-<!-- BOOTSTRAP_ONLY_END -->
-
 ## Git And Remote Policy
 
 - Inspect `git remote -v` before any branch, commit, push, or PR workflow.
