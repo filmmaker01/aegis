@@ -14,6 +14,14 @@ import type {
   OverviewDto,
   QueryRepository,
 } from '../application/query-ports'
+import {
+  PERMANENT_FAILURE_ATTEMPTS,
+  type MediaRepository,
+  type MediaStoredMeta,
+  type PendingMediaJob,
+  type StoredMediaRef,
+} from '../application/media-ports'
+import type { MediaType } from '../domain/types'
 
 /**
  * Prisma-backed Archive + Query repository (production path).
@@ -32,7 +40,9 @@ function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'P2002'
 }
 
-export class PrismaArchiveRepository implements ArchiveRepository, QueryRepository {
+export class PrismaArchiveRepository
+  implements ArchiveRepository, QueryRepository, MediaRepository
+{
   constructor(private readonly db: DbClient) {}
 
   async claimUpdate(updateId: number): Promise<boolean> {
@@ -424,5 +434,89 @@ export class PrismaArchiveRepository implements ArchiveRepository, QueryReposito
         editDate: v.editDate ? v.editDate.toISOString() : null,
       })),
     }
+  }
+
+  // ── Media repository ────────────────────────────────────────────────────────
+
+  async listPendingMedia(limit: number, maxAttempts: number): Promise<PendingMediaJob[]> {
+    const rows = await this.db.media.findMany({
+      where: {
+        OR: [{ state: 'pending' }, { state: 'failed', attempts: { lt: maxAttempts } }],
+      },
+      take: limit,
+      include: { message: { include: { chat: true, connection: true } } },
+    })
+    return rows.map((r) => ({
+      mediaId: r.id,
+      connectionId: r.message.connection.connectionId,
+      tgChatId: num(r.message.chat.tgChatId),
+      tgMessageId: r.message.tgMessageId,
+      type: r.type as MediaType,
+      tgFileId: r.tgFileId,
+      attempts: r.attempts,
+    }))
+  }
+
+  async claimMediaDownload(mediaId: string): Promise<boolean> {
+    const res = await this.db.media.updateMany({
+      where: { id: mediaId, state: { in: ['pending', 'failed'] } },
+      data: { state: 'downloading', attempts: { increment: 1 } },
+    })
+    return res.count === 1
+  }
+
+  async markMediaStored(mediaId: string, meta: MediaStoredMeta): Promise<void> {
+    await this.db.media.update({
+      where: { id: mediaId },
+      data: {
+        state: 'stored',
+        storageKey: meta.storageKey,
+        checksum: meta.checksum,
+        sizeBytes: meta.sizeBytes ?? undefined,
+        mimeType: meta.mimeType ?? undefined,
+        fileName: meta.fileName ?? undefined,
+        failedReason: null,
+        storedAt: new Date(),
+      },
+    })
+  }
+
+  async markMediaFailed(mediaId: string, reason: string, retryable: boolean): Promise<void> {
+    await this.db.media.update({
+      where: { id: mediaId },
+      data: {
+        state: 'failed',
+        failedReason: reason.slice(0, 300),
+        ...(retryable ? {} : { attempts: PERMANENT_FAILURE_ATTEMPTS }),
+      },
+    })
+  }
+
+  async getStoredMediaForMessage(
+    connectionId: string,
+    tgChatId: number,
+    tgMessageId: number,
+  ): Promise<StoredMediaRef[]> {
+    const conn = await this.connRow(connectionId)
+    if (!conn) return []
+    const chat = await this.db.chat.findUnique({
+      where: { connectionId_tgChatId: { connectionId: conn.id, tgChatId: big(tgChatId) } },
+    })
+    if (!chat) return []
+    const msg = await this.db.archivedMessage.findUnique({
+      where: { connectionId_chatId_tgMessageId: { connectionId: conn.id, chatId: chat.id, tgMessageId } },
+      select: { id: true },
+    })
+    if (!msg) return []
+    const media = await this.db.media.findMany({ where: { messageId: msg.id, state: 'stored' } })
+    return media
+      .filter((m) => m.storageKey)
+      .map((m) => ({
+        mediaId: m.id,
+        type: m.type as MediaType,
+        storageKey: m.storageKey as string,
+        fileName: m.fileName,
+        mimeType: m.mimeType,
+      }))
   }
 }

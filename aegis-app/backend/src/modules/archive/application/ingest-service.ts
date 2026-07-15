@@ -11,6 +11,8 @@ export interface IngestServiceDeps {
   clock: Clock
   /** Optional: resolves a connection on demand (Bot API getBusinessConnection) if not stored. */
   connectionFetcher?: ConnectionFetcher
+  /** Optional: fire-and-forget trigger to process pending media downloads. */
+  mediaTrigger?: () => void
   /** Whether to notify the owner when a deletion has no archived content. Default true. */
   notifyUnarchivedDeletions?: boolean
 }
@@ -27,6 +29,7 @@ export class IngestService {
   private readonly notifier: Notifier
   private readonly clock: Clock
   private readonly connectionFetcher?: ConnectionFetcher
+  private readonly mediaTrigger?: () => void
   private readonly notifyUnarchived: boolean
 
   constructor(deps: IngestServiceDeps) {
@@ -34,6 +37,7 @@ export class IngestService {
     this.notifier = deps.notifier
     this.clock = deps.clock
     this.connectionFetcher = deps.connectionFetcher
+    this.mediaTrigger = deps.mediaTrigger
     this.notifyUnarchived = deps.notifyUnarchivedDeletions ?? true
   }
 
@@ -73,6 +77,9 @@ export class IngestService {
       raw: input.raw,
     })
 
+    // Download media on arrival (fire-and-forget; the webhook ack is not blocked).
+    if (input.media.length > 0) this.mediaTrigger?.()
+
     // Tombstone reconciliation: a deletion may have arrived before this message.
     if (await this.repo.hasDeletion(input.connectionId, input.tgChatId, input.tgMessageId)) {
       await this.repo.markMessageDeleted(input.connectionId, input.tgChatId, input.tgMessageId)
@@ -96,6 +103,7 @@ export class IngestService {
       peerUsername: input.peerUsername,
       raw: input.raw,
     })
+    if (input.media.length > 0) this.mediaTrigger?.()
   }
 
   async onDeletedBusinessMessages(input: IncomingDeletion): Promise<void> {

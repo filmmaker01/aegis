@@ -6,6 +6,8 @@ import type {
   StoredConnection,
   StoredMessage,
 } from '../domain/types'
+import { randomUUID } from 'node:crypto'
+
 import type { ArchiveRepository, SaveMessageVersionInput } from '../application/ports'
 import type {
   ChatDto,
@@ -14,6 +16,15 @@ import type {
   OverviewDto,
   QueryRepository,
 } from '../application/query-ports'
+import {
+  PERMANENT_FAILURE_ATTEMPTS,
+  type MediaDownloadStatus,
+  type MediaRepository,
+  type MediaStoredMeta,
+  type PendingMediaJob,
+  type StoredMediaRef,
+} from '../application/media-ports'
+import type { MediaType } from '../domain/types'
 
 interface ConnRecord {
   connectionId: string
@@ -54,7 +65,24 @@ interface MsgRecord {
   isDeleted: boolean
   receivedAt: Date
   versions: VersionRecord[]
-  media: MediaItem[]
+}
+
+interface MediaRec {
+  id: string
+  connectionId: string
+  tgChatId: number
+  tgMessageId: number
+  type: MediaType
+  tgFileId: string
+  tgFileUniqueId?: string
+  mimeType?: string
+  sizeBytes?: number
+  fileName?: string
+  storageKey?: string
+  checksum?: string
+  state: MediaDownloadStatus
+  attempts: number
+  failedReason?: string
 }
 
 interface DelRecord {
@@ -71,12 +99,15 @@ const sigOf = (text?: string | null, editDate?: Date) =>
   `${text ?? ''}|${editDate ? editDate.getTime() : ''}`
 
 /** In-memory Archive + Query repository — for tests and local dev without Postgres. */
-export class InMemoryArchiveRepository implements ArchiveRepository, QueryRepository {
+export class InMemoryArchiveRepository
+  implements ArchiveRepository, QueryRepository, MediaRepository
+{
   readonly processed = new Set<number>()
   readonly connections = new Map<string, ConnRecord>()
   readonly chats = new Map<string, ChatRecord>()
   readonly messages = new Map<string, MsgRecord>()
   readonly deletions = new Map<string, DelRecord>()
+  readonly mediaItems = new Map<string, MediaRec>()
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -172,18 +203,17 @@ export class InMemoryArchiveRepository implements ArchiveRepository, QueryReposi
         isDeleted: false,
         receivedAt: this.now(),
         versions: [{ versionNo: 1, text: input.text ?? null, editDate: input.editDate, sig }],
-        media: [],
       }
-      mergeMedia(rec, input.media)
       this.messages.set(k, rec)
+      this.mergeMedia(rec, input.media)
       return toStored(rec)
     }
 
     const last = existing.versions[existing.versions.length - 1]
     if (last && last.sig === sig) {
       // idempotent re-delivery — merge media only
-      mergeMedia(existing, input.media)
       existing.hasMedia = existing.hasMedia || input.hasMedia
+      this.mergeMedia(existing, input.media)
       return toStored(existing)
     }
 
@@ -196,8 +226,111 @@ export class InMemoryArchiveRepository implements ArchiveRepository, QueryReposi
     existing.currentText = input.text ?? null
     if (input.editDate || existing.versions.length > 1) existing.isEdited = true
     existing.hasMedia = existing.hasMedia || input.hasMedia
-    mergeMedia(existing, input.media)
+    this.mergeMedia(existing, input.media)
     return toStored(existing)
+  }
+
+  private mergeMedia(rec: MsgRecord, items: MediaItem[]): void {
+    if (items.length > 0) rec.hasMedia = true
+    for (const item of items) {
+      const dup = [...this.mediaItems.values()].some(
+        (m) =>
+          m.connectionId === rec.connectionId &&
+          m.tgChatId === rec.tgChatId &&
+          m.tgMessageId === rec.tgMessageId &&
+          m.tgFileId === item.tgFileId,
+      )
+      if (dup) continue
+      const id = randomUUID()
+      this.mediaItems.set(id, {
+        id,
+        connectionId: rec.connectionId,
+        tgChatId: rec.tgChatId,
+        tgMessageId: rec.tgMessageId,
+        type: item.type,
+        tgFileId: item.tgFileId,
+        tgFileUniqueId: item.tgFileUniqueId,
+        mimeType: item.mimeType,
+        sizeBytes: item.sizeBytes,
+        state: 'pending',
+        attempts: 0,
+      })
+    }
+  }
+
+  // ── Media repository ────────────────────────────────────────────────────────
+
+  async listPendingMedia(limit: number, maxAttempts: number): Promise<PendingMediaJob[]> {
+    const jobs: PendingMediaJob[] = []
+    for (const m of this.mediaItems.values()) {
+      const retryable = m.state === 'pending' || (m.state === 'failed' && m.attempts < maxAttempts)
+      if (!retryable) continue
+      jobs.push({
+        mediaId: m.id,
+        connectionId: m.connectionId,
+        tgChatId: m.tgChatId,
+        tgMessageId: m.tgMessageId,
+        type: m.type,
+        tgFileId: m.tgFileId,
+        attempts: m.attempts,
+      })
+      if (jobs.length >= limit) break
+    }
+    return jobs
+  }
+
+  async claimMediaDownload(mediaId: string): Promise<boolean> {
+    const m = this.mediaItems.get(mediaId)
+    if (!m || (m.state !== 'pending' && m.state !== 'failed')) return false
+    m.state = 'downloading'
+    m.attempts += 1
+    return true
+  }
+
+  async markMediaStored(mediaId: string, meta: MediaStoredMeta): Promise<void> {
+    const m = this.mediaItems.get(mediaId)
+    if (!m) return
+    m.state = 'stored'
+    m.storageKey = meta.storageKey
+    m.checksum = meta.checksum
+    if (meta.sizeBytes !== undefined) m.sizeBytes = meta.sizeBytes
+    if (meta.mimeType !== undefined) m.mimeType = meta.mimeType
+    if (meta.fileName !== undefined) m.fileName = meta.fileName
+    m.failedReason = undefined
+  }
+
+  async markMediaFailed(mediaId: string, reason: string, retryable: boolean): Promise<void> {
+    const m = this.mediaItems.get(mediaId)
+    if (!m) return
+    m.state = 'failed'
+    m.failedReason = reason
+    if (!retryable) m.attempts = PERMANENT_FAILURE_ATTEMPTS
+  }
+
+  async getStoredMediaForMessage(
+    connectionId: string,
+    tgChatId: number,
+    tgMessageId: number,
+  ): Promise<StoredMediaRef[]> {
+    const refs: StoredMediaRef[] = []
+    for (const m of this.mediaItems.values()) {
+      if (
+        m.connectionId === connectionId &&
+        m.tgChatId === tgChatId &&
+        m.tgMessageId === tgMessageId &&
+        m.state === 'stored' &&
+        m.storageKey
+      ) {
+        refs.push({
+          mediaId: m.id,
+          type: m.type,
+          storageKey: m.storageKey,
+          fileName: m.fileName ?? null,
+          mimeType: m.mimeType ?? null,
+        })
+      }
+    }
+    return refs
   }
 
   async markMessageDeleted(
@@ -366,12 +499,3 @@ function toStored(m: MsgRecord): StoredMessage {
   }
 }
 
-function mergeMedia(rec: MsgRecord, media: MediaItem[]): void {
-  for (const item of media) {
-    const dup = rec.media.some(
-      (m) => (item.tgFileUniqueId && m.tgFileUniqueId === item.tgFileUniqueId) || m.tgFileId === item.tgFileId,
-    )
-    if (!dup) rec.media.push(item)
-  }
-  if (media.length > 0) rec.hasMedia = true
-}
