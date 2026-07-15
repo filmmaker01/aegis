@@ -7,6 +7,7 @@ import type {
   StoredConnection,
   StoredMessage,
 } from '../domain/types'
+import type { StoredMediaRef } from './media-ports'
 
 export interface Clock {
   now(): Date
@@ -97,6 +98,8 @@ export interface DeletionNotification {
   /** Saved text of the deleted message, if we had archived it. */
   savedText?: string | null
   hasMedia: boolean
+  /** Stored media (state=stored) to send back; empty if none stored yet. */
+  media: StoredMediaRef[]
   /** False when the deleted message was never in our archive (e.g. pre-connection history). */
   archived: boolean
   peerLabel?: string | null

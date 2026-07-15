@@ -4,6 +4,7 @@ import type {
   IncomingMessage,
 } from '../domain/types'
 import type { ArchiveRepository, Clock, ConnectionFetcher, Notifier } from './ports'
+import type { MediaRepository } from './media-ports'
 
 export interface IngestServiceDeps {
   repository: ArchiveRepository
@@ -13,6 +14,8 @@ export interface IngestServiceDeps {
   connectionFetcher?: ConnectionFetcher
   /** Optional: fire-and-forget trigger to process pending media downloads. */
   mediaTrigger?: () => void
+  /** Optional: reads stored media to attach to deletion notifications. */
+  mediaReader?: Pick<MediaRepository, 'getStoredMediaForMessage'>
   /** Whether to notify the owner when a deletion has no archived content. Default true. */
   notifyUnarchivedDeletions?: boolean
 }
@@ -30,6 +33,7 @@ export class IngestService {
   private readonly clock: Clock
   private readonly connectionFetcher?: ConnectionFetcher
   private readonly mediaTrigger?: () => void
+  private readonly mediaReader?: Pick<MediaRepository, 'getStoredMediaForMessage'>
   private readonly notifyUnarchived: boolean
 
   constructor(deps: IngestServiceDeps) {
@@ -38,6 +42,7 @@ export class IngestService {
     this.clock = deps.clock
     this.connectionFetcher = deps.connectionFetcher
     this.mediaTrigger = deps.mediaTrigger
+    this.mediaReader = deps.mediaReader
     this.notifyUnarchived = deps.notifyUnarchivedDeletions ?? true
   }
 
@@ -143,6 +148,10 @@ export class IngestService {
     const archived = message !== null
     if (!archived && !this.notifyUnarchived) return
 
+    const media = this.mediaReader
+      ? await this.mediaReader.getStoredMediaForMessage(connectionId, tgChatId, tgMessageId)
+      : []
+
     await this.notifier.notifyDeletion({
       connectionId,
       ownerTgChatId: connection.tgUserChatId,
@@ -150,6 +159,7 @@ export class IngestService {
       tgMessageId,
       savedText: message?.currentText ?? null,
       hasMedia: message?.hasMedia ?? false,
+      media,
       archived,
     })
     await this.repo.markDeletionNotified(connectionId, tgChatId, tgMessageId, this.clock.now())
