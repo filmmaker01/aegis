@@ -48,6 +48,11 @@ const envSchema = z.object({
   TELEGRAM_INITDATA_MAX_AGE_SECONDS: z.coerce.number().int().positive().optional(),
   // 'memory' runs the archive in-memory (data is lost on restart) when Postgres is unavailable.
   ARCHIVE_STORE: z.enum(['memory', 'postgres']).optional(),
+  // Media storage: 'local' (disk fallback) or 's3' (SPACES_*). Default: s3 if configured else local.
+  MEDIA_STORAGE: z.enum(['local', 's3']).optional(),
+  MEDIA_LOCAL_DIR: optionalStringSchema,
+  // Max bytes we attempt to download from Telegram (Bot API caps ~20MB without a local API server).
+  MEDIA_MAX_BYTES: z.coerce.number().int().positive().optional(),
   COOKIE_SECURE: booleanStringSchema,
   SPACES_REGION: optionalStringSchema,
   SPACES_BUCKET: optionalStringSchema,

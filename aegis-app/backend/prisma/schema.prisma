@@ -144,14 +144,21 @@ model Media {
   type           String   // photo | voice | video | video_note | audio | document | animation | sticker
   tgFileId       String   @map("tg_file_id")
   tgFileUniqueId String?  @map("tg_file_unique_id")
+  fileName       String?  @map("file_name")
   mimeType       String?  @map("mime_type")
   sizeBytes      Int?     @map("size_bytes")
   storageKey     String?  @map("storage_key")
-  state          String   @default("pending") // pending | stored | unavailable | purged
+  checksum       String?  // sha256 of downloaded bytes
+  state          String   @default("pending") // pending | downloading | stored | failed
+  attempts       Int      @default(0)
+  failedReason   String?  @map("failed_reason")
   createdAt      DateTime @default(now()) @map("created_at")
+  storedAt       DateTime? @map("stored_at")
 
   message ArchivedMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
+  @@index([state], map: "media_state_idx")
+  @@unique([messageId, tgFileId], map: "media_message_file_key")
   @@map("media")
 }
 
