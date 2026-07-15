@@ -38,3 +38,7 @@ backend/.prisma-generate.lock
 
 # archived media (local disk storage)
 .media/
+
+# allow env EXAMPLE templates (no secrets)
+!.env.*.example
+!backend/.env.*.example
