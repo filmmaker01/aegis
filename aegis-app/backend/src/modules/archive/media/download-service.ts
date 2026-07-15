@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { basename, extname } from 'node:path'
 
+import { recordMediaFailure } from '../../../monitoring'
 import type { TelegramFileClient } from '../../telegram/file-client'
 import type { MediaRepository, PendingMediaJob } from '../application/media-ports'
 import type { MediaStorage } from './storage'
@@ -63,7 +64,10 @@ export class MediaDownloadService {
     for (const job of jobs) {
       const ok = await this.processJob(job)
       if (ok === 'stored') stored++
-      else if (ok === 'failed') failed++
+      else if (ok === 'failed') {
+        failed++
+        recordMediaFailure()
+      }
     }
     return { processed: jobs.length, stored, failed }
   }

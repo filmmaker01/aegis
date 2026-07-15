@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 
 import type { IngestService } from '../../archive/application/ingest-service'
+import { recordWebhookError } from '../../../monitoring'
 import { dispatchUpdate, type RawUpdate } from '../updates'
 
 const SECRET_HEADER = 'x-telegram-bot-api-secret-token'
@@ -41,7 +42,8 @@ export function createWebhookRoutes({ ingest, webhookSecret }: WebhookRoutesOpti
       const handled = await dispatchUpdate(update, ingest)
       return c.json({ ok: true, handled }, 200)
     } catch (err) {
-      console.error('[webhook] processing failed for update', update.update_id, err)
+      recordWebhookError()
+      console.error('[webhook] processing failed for update', update.update_id, (err as Error).name)
       return c.json({ error: { code: 'INTERNAL', message: 'Processing failed' } }, 500)
     }
   })

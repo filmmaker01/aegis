@@ -5,6 +5,7 @@ import { secureHeaders } from 'hono/secure-headers'
 import type { DbClient } from './db'
 import type { AppEnv } from './env'
 import { errorResponse, handleError, validationErrorHook } from './http/errors'
+import { metricsSnapshot } from './monitoring'
 import { createArchiveModule } from './modules/archive'
 import { createAuthModule, type AuthHttpEnv } from './modules/auth'
 
@@ -42,10 +43,19 @@ export function createApp({ env, prisma }: CreateAppOptions) {
     })
   })
 
+  // Liveness: process is up (no external deps). Used by the platform health check.
   app.get('/health', (c) => {
-    return c.json({
-      status: 'ok',
-    })
+    return c.json({ status: 'ok' })
+  })
+
+  // Readiness: DB reachable + error-metrics snapshot. 503 when the DB is down.
+  app.get('/ready', async (c) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`
+      return c.json({ status: 'ready', db: 'ok', metrics: metricsSnapshot() })
+    } catch {
+      return c.json({ status: 'degraded', db: 'down', metrics: metricsSnapshot() }, 503)
+    }
   })
 
   app.route('/api/auth', auth.routes)

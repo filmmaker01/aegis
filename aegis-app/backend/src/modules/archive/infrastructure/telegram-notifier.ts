@@ -1,3 +1,4 @@
+import { recordNotifyFailure } from '../../../monitoring'
 import type { SendResult, TelegramFileClient } from '../../telegram/file-client'
 import type { DeletionNotification, Notifier } from '../application/ports'
 import type { MediaStorage } from '../media/storage'
@@ -29,6 +30,8 @@ export class TelegramNotifier implements Notifier {
       this.fileClient.sendMessage(n.ownerTgChatId, this.headerText(n)),
     )
 
+    if (!textOk) recordNotifyFailure()
+
     if (n.media.length === 0) {
       console.log(`[notify] message_id=${n.tgMessageId} archived=${n.archived} media=0 text=${textOk ? 'ok' : 'fail'}`)
       return
@@ -58,6 +61,7 @@ export class TelegramNotifier implements Notifier {
     }
 
     if (failedTypes.length > 0) {
+      recordNotifyFailure()
       // Honest fallback: tell the owner which media could not be re-sent.
       await this.withRetry(n.tgMessageId, () =>
         this.fileClient.sendMessage(

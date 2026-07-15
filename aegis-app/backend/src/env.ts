@@ -55,6 +55,8 @@ const envSchema = z.object({
   MEDIA_LOCAL_DIR: optionalStringSchema,
   // Max bytes we attempt to download from Telegram (Bot API caps ~20MB without a local API server).
   MEDIA_MAX_BYTES: z.coerce.number().int().positive().optional(),
+  // Optional error tracking (e.g. Sentry). Empty disables it.
+  SENTRY_DSN: optionalStringSchema,
   COOKIE_SECURE: booleanStringSchema,
   SPACES_REGION: optionalStringSchema,
   SPACES_BUCKET: optionalStringSchema,
