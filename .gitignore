@@ -2,3 +2,8 @@ logs/
 node_modules/
 .env
 tooling/
+
+# Local agent-skills install (`npx skills add ...`) — machine-local, includes symlinks
+.agents/
+.claude/skills/
+skills-lock.json
