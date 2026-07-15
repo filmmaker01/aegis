@@ -58,7 +58,25 @@ export class IngestService {
     }
   }
 
+  /**
+   * Ensures the connection is stored (fetching user_chat_id via the Bot API if
+   * the connection event was missed). The Prisma repo requires the connection to
+   * exist before storing messages, so this must run before any write.
+   */
+  private async ensureConnection(connectionId: string): Promise<boolean> {
+    if (await this.repo.getConnection(connectionId)) return true
+    if (!this.connectionFetcher) return false
+    const fetched = await this.connectionFetcher.fetchConnection(connectionId)
+    if (!fetched) return false
+    await this.repo.upsertConnection(fetched)
+    return true
+  }
+
   async onBusinessMessage(input: IncomingMessage): Promise<void> {
+    if (!(await this.ensureConnection(input.connectionId))) {
+      console.error(`[ingest] message_id=${input.tgMessageId} skipped=no_connection`)
+      return
+    }
     await this.repo.upsertChat({
       connectionId: input.connectionId,
       tgChatId: input.tgChatId,
@@ -93,6 +111,10 @@ export class IngestService {
   }
 
   async onEditedBusinessMessage(input: IncomingMessage): Promise<void> {
+    if (!(await this.ensureConnection(input.connectionId))) {
+      console.error(`[ingest] edited message_id=${input.tgMessageId} skipped=no_connection`)
+      return
+    }
     await this.repo.saveMessageVersion({
       connectionId: input.connectionId,
       tgChatId: input.tgChatId,
@@ -112,6 +134,12 @@ export class IngestService {
   }
 
   async onDeletedBusinessMessages(input: IncomingDeletion): Promise<void> {
+    // Ensure the connection is known so recordDeletion can attach to it and we
+    // can route the notification to user_chat_id.
+    if (!(await this.ensureConnection(input.connectionId))) {
+      console.error(`[ingest] delete for ${input.tgMessageIds.length} msg(s) skipped=no_connection`)
+      return
+    }
     const now = this.clock.now()
     for (const tgMessageId of input.tgMessageIds) {
       const { created } = await this.repo.recordDeletion(
@@ -131,15 +159,7 @@ export class IngestService {
     tgChatId: number,
     tgMessageId: number,
   ): Promise<void> {
-    let connection = await this.repo.getConnection(connectionId)
-    if (!connection && this.connectionFetcher) {
-      // Self-heal: fetch the connection (user_chat_id) via the Bot API if we missed the event.
-      const fetched = await this.connectionFetcher.fetchConnection(connectionId)
-      if (fetched) {
-        await this.repo.upsertConnection(fetched)
-        connection = await this.repo.getConnection(connectionId)
-      }
-    }
+    const connection = await this.repo.getConnection(connectionId)
     if (!connection) {
       console.error(`[notify] message_id=${tgMessageId} skipped=no_connection (user_chat_id unknown)`)
       return
