@@ -40,11 +40,24 @@ Done (continued):
   Production S3/Supabase config: `media-storage-production.md`.
 - ✅ Connection self-heal (`getBusinessConnection`) in all handlers (fixed a Postgres-only 500).
 
-Remaining before Phase 2 is "done":
-- ⏳ Formal Prisma migrations (currently `db push`) + managed Postgres for production.
+Done (continued):
+- ✅ **Formal Prisma migrations** (squashed init: `uuidv7()` + all tables), verified via
+  `migrate deploy` on a clean DB; `directUrl` for pooled setups. Replaces `db push`.
+- ✅ **Production config**: fail-fast env validation (no memory/local/non-TLS in prod),
+  `.env.production.example` (Supabase pooled + direct + Storage), `/health` + `/ready` (DB ping
+  + error metrics), `start:prod` (migrate deploy → serve), Dockerfile + `fly.toml`.
+- ✅ **Deployment guide**: `aegis-deployment.md` (Supabase project/bucket/keys, Railway/Fly,
+  Vercel Mini App, backups/PITR, rollback, security).
+
+## Phase 3 — Production deploy (in progress)
+Prepared and awaiting the user's web-UI actions (create Supabase project/bucket/keys, deploy
+backend host + Mini App). Then: re-register webhook to the permanent URL and run the production
+live e2e (text/photo/voice + persistence across restart).
+
+Remaining:
+- ⏳ Execute the deploy (user creates Supabase + host; I re-register webhook + run e2e).
 - ⏳ Media retention/GC (delete bucket object with the row); background sweeper for pending media.
 - ⏳ Notification polish (quiet hours, batching, mute per chat); optional edit notifications.
-- ⏳ Real S3/Supabase deployment (config prepared; needs a bucket + keys).
 
 ## Phase 3 — Beta
 - Edited history, Chats/Settings/Subscription screens, billing, retention, legal review.
