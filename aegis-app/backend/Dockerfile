@@ -26,4 +26,6 @@ WORKDIR /app/backend
 
 ENV NODE_ENV=production
 
-CMD ["bun", "run", "start"]
+# Apply pending migrations (prisma migrate deploy, idempotent), then serve.
+# Prisma client is already generated in the build stage.
+CMD ["bun", "run", "start:prod"]

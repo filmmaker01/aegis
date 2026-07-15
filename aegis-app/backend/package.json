@@ -7,6 +7,7 @@
     "dev": "bun run prisma:generate && bun --watch src/index.ts",
     "start": "bun run start:api",
     "start:api": "bun run prisma:generate && bun src/index.ts",
+    "start:prod": "bun run prisma:deploy && bun src/index.ts",
     "start:worker": "bun run prisma:generate && bun src/worker.ts",
     "start:cron": "bun run prisma:generate && bun src/cron.ts",
     "start:raw": "bun src/index.ts",

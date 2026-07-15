@@ -1,0 +1,31 @@
+# Fly.io config for the Aegis backend (always-on: webhook + in-process media worker).
+# Alternative host: Railway (Dockerfile auto-detected; set start cmd `bun run start:prod`,
+# env in the dashboard). Secrets are set with `fly secrets set ...`, never committed.
+app = "aegis-backend"
+primary_region = "fra"
+
+[build]
+  dockerfile = "backend/Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Always-on: the media worker runs in-process and the webhook must stay reachable.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "get"
+    path = "/health"
+    interval = "15s"
+    timeout = "3s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
