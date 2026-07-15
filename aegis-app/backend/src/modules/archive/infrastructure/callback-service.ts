@@ -3,11 +3,15 @@ import type { ArchiveRepository, CallbackEventRef, CallbackMessageRef } from '..
 import type { IncomingCallback } from '../domain/types'
 import type { MediaStorage } from '../media/storage'
 import {
+  archiveDetailCard,
+  archiveListCard,
   decodeCallback,
+  deletedKeyboard,
   historyKeyboard,
   historyView,
   mediaCaption,
   splitText,
+  type InlineKeyboard,
 } from '../notification/format'
 
 const HISTORY_PAGE_SIZE = 5
@@ -46,7 +50,7 @@ export class CallbackService {
           await this.history(cb, parts[0], parts[1])
           break
         case 'archive':
-          await this.archive(cb)
+          await this.archive(cb, parts[0])
           break
         default:
           await this.deny(cb)
@@ -189,10 +193,53 @@ export class CallbackService {
     await this.answer(cb)
   }
 
-  // ── archive (Mini App, upcoming) ───────────────────────────────────────────
+  // ── archive (rendered IN-CHAT, not the Mini App) ───────────────────────────
 
-  private async archive(cb: IncomingCallback): Promise<void> {
-    await this.answer(cb, 'Полный архив скоро появится в мини-приложении Aegis.', true)
+  /**
+   * "Открыть архив" / "Показать все": renders the archived copy directly in the
+   * chat. A single deletion -> a full detail card (untruncated saved text + media
+   * summary + Restore/History). A bulk deletion -> the full list of its items.
+   */
+  private async archive(cb: IncomingCallback, id: string | undefined): Promise<void> {
+    if (!id) return this.deny(cb)
+    const ctx = await this.repo.getArchiveContext(id)
+    if (!ctx || ctx.ownerTgUserId !== cb.fromTgId) return this.deny(cb)
+    const peer = { name: ctx.peerTitle, username: ctx.peerUsername }
+
+    if (ctx.items.length > 1) {
+      const text = archiveListCard({
+        peer,
+        at: ctx.detectedAt,
+        items: ctx.items.map((i) => ({ tgMessageId: i.tgMessageId, savedText: i.savedText, mediaTypes: i.mediaTypes })),
+      })
+      await this.sendChunks(cb.chatId, text)
+      return this.answer(cb)
+    }
+
+    const it = ctx.items[0]
+    if (!it || !it.messageId) return this.answer(cb, 'Копия не сохранена')
+    const text = archiveDetailCard({
+      peer,
+      at: ctx.detectedAt,
+      savedText: it.savedText,
+      mediaTypes: it.mediaTypes,
+      versionCount: it.versionCount,
+    })
+    const kb = deletedKeyboard(it.eventId, { hasHistory: it.versionCount > 1, archived: true })
+    await this.sendChunks(cb.chatId, text, kb)
+    await this.answer(cb)
+  }
+
+  /** Sends card text (HTML) across length-safe chunks; keyboard on the last chunk. */
+  private async sendChunks(chatId: number, text: string, keyboard?: InlineKeyboard): Promise<void> {
+    const chunks = splitText(text)
+    for (let i = 0; i < chunks.length; i++) {
+      const isLast = i === chunks.length - 1
+      await this.fileClient.sendMessage(chatId, chunks[i]!, {
+        parseMode: 'HTML',
+        ...(isLast && keyboard ? { replyMarkup: keyboard as InlineKeyboardMarkup } : {}),
+      })
+    }
   }
 
   // ── helpers ────────────────────────────────────────────────────────────────

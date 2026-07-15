@@ -283,6 +283,68 @@ export function historyView(input: HistoryViewInput): string {
   return lines.join('\n').trimEnd()
 }
 
+function countTypes(types: MediaType[]): Array<[MediaType, number]> {
+  const m = new Map<MediaType, number>()
+  for (const t of types) m.set(t, (m.get(t) ?? 0) + 1)
+  return [...m.entries()]
+}
+
+export interface ArchiveDetailInput {
+  peer: PeerRef
+  at: Date
+  savedText?: string | null
+  mediaTypes: MediaType[]
+  versionCount: number
+  now?: Date
+}
+
+/** In-chat "open archive" detail for a single archived message (full saved text). */
+export function archiveDetailCard(input: ArchiveDetailInput): string {
+  const now = input.now ?? new Date()
+  const lines = ['📄 <b>Архивная копия</b>', '', peerLine(input.peer, input.at, now), '']
+  lines.push(
+    input.savedText && input.savedText.trim().length > 0
+      ? escapeHtml(truncate(input.savedText, QUOTED_BODY_LIMIT))
+      : '<i>(без текста)</i>',
+  )
+  const meta: string[] = []
+  if (input.mediaTypes.length > 0) {
+    meta.push('📎 ' + countTypes(input.mediaTypes).map(([t, n]) => `${mediaNoun(t, n)}${n > 1 ? ` ×${n}` : ''}`).join(', '))
+  }
+  if (input.versionCount > 1) meta.push(`✏️ версий: ${input.versionCount}`)
+  if (meta.length > 0) lines.push('', meta.join('  ·  '))
+  return lines.join('\n')
+}
+
+export interface ArchiveListItem {
+  tgMessageId: number
+  savedText?: string | null
+  mediaTypes?: MediaType[]
+}
+
+export interface ArchiveListInput {
+  peer: PeerRef
+  at: Date
+  items: ArchiveListItem[]
+  now?: Date
+}
+
+/** In-chat "show all" list for a bulk deletion — every archived item, numbered. */
+export function archiveListCard(input: ArchiveListInput): string {
+  const now = input.now ?? new Date()
+  const n = input.items.length
+  const lines = [`📄 <b>Удалённые сообщения · ${n}</b>`, '', peerLine(input.peer, input.at, now), '']
+  const shown = input.items.slice(0, 30)
+  shown.forEach((it, i) => {
+    const t = it.savedText?.trim()
+    if (t) lines.push(`${i + 1}. ${escapeHtml(truncate(t, 120))}`)
+    else if (it.mediaTypes && it.mediaTypes.length > 0) lines.push(`${i + 1}. 📎 ${escapeHtml(mediaNoun(it.mediaTypes[0]!))}`)
+    else lines.push(`${i + 1}. <i>(без текста)</i>`)
+  })
+  if (n > shown.length) lines.push('', `<i>…и ещё ${n - shown.length}</i>`)
+  return lines.join('\n')
+}
+
 // ── Inline keyboards ─────────────────────────────────────────────────────────
 
 export interface InlineButton {

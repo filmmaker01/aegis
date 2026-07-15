@@ -253,13 +253,53 @@ describe('CallbackService — history', () => {
   })
 })
 
-describe('CallbackService — archive', () => {
-  test('archive action points to the Mini App (no data revealed)', async () => {
+describe('CallbackService — archive (in-chat, not Mini App)', () => {
+  test('single deletion renders the full archive detail card in the chat', async () => {
+    await repo.saveMessageVersion(save(1, 'полный сохранённый текст'))
+    const { eventId } = await repo.recordDeletion(CONN, CHAT, 1, new Date())
     const { client, calls } = fakeClient()
     const svc = new CallbackService(repo, client, new FakeStorage())
-    await svc.handle(cb('archive:whatever'))
-    const answer = calls.find((c) => c.method === 'answer')
-    expect(answer?.text).toContain('мини-приложении')
-    expect(answer?.showAlert).toBe(true)
+
+    await svc.handle(cb(`archive:${eventId}`))
+
+    const msgs = calls.filter((c) => c.method === 'sendMessage')
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]?.chatId).toBe(OWNER_CHAT)
+    expect(msgs[0]?.text).toContain('Архивная копия')
+    expect(msgs[0]?.text).toContain('полный сохранённый текст')
+    // Never punts to the Mini App anymore.
+    expect(msgs[0]?.text ?? '').not.toContain('мини-приложении')
+  })
+
+  test('bulk deletion lists all its items in the chat', async () => {
+    const at = new Date('2026-07-14T11:00:00Z')
+    await repo.saveMessageVersion(save(1, 'первое'))
+    await repo.saveMessageVersion(save(2, 'второе'))
+    const { eventId } = await repo.recordDeletion(CONN, CHAT, 1, at)
+    await repo.recordDeletion(CONN, CHAT, 2, at) // same detectedAt -> same batch
+
+    const { client, calls } = fakeClient()
+    const svc = new CallbackService(repo, client, new FakeStorage())
+    await svc.handle(cb(`archive:${eventId}`))
+
+    const joined = calls.filter((c) => c.method === 'sendMessage').map((c) => c.text).join('\n')
+    expect(joined).toContain('Удалённые сообщения')
+    expect(joined).toContain('первое')
+    expect(joined).toContain('второе')
+  })
+
+  test('unknown or foreign id -> "Недоступно" (anti-enumeration)', async () => {
+    await repo.saveMessageVersion(save(1, 'x'))
+    const { eventId } = await repo.recordDeletion(CONN, CHAT, 1, new Date())
+
+    const a = fakeClient()
+    await new CallbackService(repo, a.client, new FakeStorage()).handle(cb('archive:not-real'))
+    expect(answersOf(a.calls)).toEqual(['Недоступно'])
+    expect(a.calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0)
+
+    const b = fakeClient()
+    await new CallbackService(repo, b.client, new FakeStorage()).handle(cb(`archive:${eventId}`, 999_999))
+    expect(answersOf(b.calls)).toEqual(['Недоступно'])
+    expect(b.calls.filter((c) => c.method === 'sendMessage')).toHaveLength(0)
   })
 })

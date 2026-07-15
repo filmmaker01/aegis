@@ -118,6 +118,32 @@ export interface ArchiveRepository {
 
   /** Stored media for a message by its internal id (used when re-sending on restore). */
   getStoredMediaForMessageId(messageId: string): Promise<StoredMediaRef[]>
+
+  /**
+   * In-chat archive view for a deletion event: the single archived message, or —
+   * when the event was part of a bulk deletion — all its siblings (grouped by the
+   * shared detection time). Owner-resolved for the ownership check. null if unknown.
+   */
+  getArchiveContext(eventId: string): Promise<ArchiveContext | null>
+}
+
+/** One archived item shown in the in-chat archive view. */
+export interface ArchiveItem {
+  eventId: string
+  messageId: string | null
+  tgMessageId: number
+  savedText: string | null
+  mediaTypes: MediaType[]
+  versionCount: number
+}
+
+/** Archive context for a deletion event (single message or a whole bulk deletion). */
+export interface ArchiveContext {
+  ownerTgUserId: number
+  peerTitle: string | null
+  peerUsername: string | null
+  detectedAt: Date
+  items: ArchiveItem[]
 }
 
 /** Owner + natural keys resolved from a deletion event id. */

@@ -7,6 +7,7 @@ import type {
   StoredMessage,
 } from '../domain/types'
 import type {
+  ArchiveContext,
   ArchiveRepository,
   CallbackEventRef,
   CallbackMessageRef,
@@ -462,6 +463,46 @@ export class PrismaArchiveRepository
         }))
     } catch {
       return []
+    }
+  }
+
+  async getArchiveContext(eventId: string): Promise<ArchiveContext | null> {
+    try {
+      const ev = await this.db.deletedEvent.findUnique({
+        where: { id: eventId },
+        include: { connection: true, chat: true },
+      })
+      if (!ev) return null
+      // Bulk-deletion siblings share the exact detectedAt (one ingest call).
+      const events = await this.db.deletedEvent.findMany({
+        where: { connectionId: ev.connectionId, chatId: ev.chatId, detectedAt: ev.detectedAt },
+        orderBy: { tgMessageId: 'asc' },
+        include: {
+          message: {
+            select: {
+              currentText: true,
+              media: { select: { type: true } },
+              _count: { select: { versions: true } },
+            },
+          },
+        },
+      })
+      return {
+        ownerTgUserId: num(ev.connection.ownerTgUserId),
+        peerTitle: ev.chat.peerTitle,
+        peerUsername: ev.chat.peerUsername,
+        detectedAt: ev.detectedAt,
+        items: events.map((e) => ({
+          eventId: e.id,
+          messageId: e.messageId,
+          tgMessageId: e.tgMessageId,
+          savedText: e.message?.currentText ?? null,
+          mediaTypes: (e.message?.media ?? []).map((m) => m.type as MediaType),
+          versionCount: e.message?._count.versions ?? 0,
+        })),
+      }
+    } catch {
+      return null
     }
   }
 

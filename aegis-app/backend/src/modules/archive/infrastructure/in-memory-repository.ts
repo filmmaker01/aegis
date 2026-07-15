@@ -9,6 +9,7 @@ import type {
 import { randomUUID } from 'node:crypto'
 
 import type {
+  ArchiveContext,
   ArchiveRepository,
   CallbackEventRef,
   CallbackMessageRef,
@@ -409,6 +410,43 @@ export class InMemoryArchiveRepository
     const chat = this.chats.get(chatKey(connectionId, tgChatId))
     if (!chat) return null
     return { peerTitle: chat.peerTitle ?? null, peerUsername: chat.peerUsername ?? null }
+  }
+
+  async getArchiveContext(eventId: string): Promise<ArchiveContext | null> {
+    const d = this.deletionsById.get(eventId)
+    if (!d) return null
+    const conn = [...this.connections.values()].find((c) => c.connectionId === d.connectionId)
+    if (!conn) return null
+    const chat = this.chats.get(chatKey(d.connectionId, d.tgChatId))
+    const siblings = [...this.deletionsById.values()]
+      .filter(
+        (x) =>
+          x.connectionId === d.connectionId &&
+          x.tgChatId === d.tgChatId &&
+          x.detectedAt.getTime() === d.detectedAt.getTime(),
+      )
+      .sort((a, b) => a.tgMessageId - b.tgMessageId)
+    const items = siblings.map((s) => {
+      const msg = this.messages.get(key(s.connectionId, s.tgChatId, s.tgMessageId))
+      const media = [...this.mediaItems.values()].filter(
+        (m) => m.connectionId === s.connectionId && m.tgChatId === s.tgChatId && m.tgMessageId === s.tgMessageId,
+      )
+      return {
+        eventId: s.id,
+        messageId: msg?.id ?? null,
+        tgMessageId: s.tgMessageId,
+        savedText: msg?.currentText ?? null,
+        mediaTypes: media.map((m) => m.type),
+        versionCount: msg?.versions.length ?? 0,
+      }
+    })
+    return {
+      ownerTgUserId: conn.ownerTgUserId,
+      peerTitle: chat?.peerTitle ?? null,
+      peerUsername: chat?.peerUsername ?? null,
+      detectedAt: d.detectedAt,
+      items,
+    }
   }
 
   async getEventForCallback(eventId: string): Promise<CallbackEventRef | null> {
