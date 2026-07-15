@@ -38,7 +38,7 @@ function webhookPost(mod: ReturnType<typeof createArchiveModule>, body: unknown,
 
 describe('archive HTTP wiring (in-memory)', () => {
   test('webhook ingests, read API returns archived + deleted with saved content', async () => {
-    const mod = createArchiveModule({ env, notifier: { async notifyDeletion() {} } }) // no db -> in-memory
+    const mod = createArchiveModule({ env, notifier: { async notifyDeletion() {}, async notifyEdit() {}, async notifyBatchDeletion() {} } }) // no db -> in-memory
 
     // 1. connection
     let res = await webhookPost(mod, {
@@ -75,13 +75,13 @@ describe('archive HTTP wiring (in-memory)', () => {
   })
 
   test('webhook rejects a bad secret token', async () => {
-    const mod = createArchiveModule({ env, notifier: { async notifyDeletion() {} } })
+    const mod = createArchiveModule({ env, notifier: { async notifyDeletion() {}, async notifyEdit() {}, async notifyBatchDeletion() {} } })
     const res = await webhookPost(mod, { update_id: 9, business_connection: { id: CONN, user: { id: OWNER }, user_chat_id: OWNER, is_enabled: true } }, 'wrong')
     expect(res.status).toBe(401)
   })
 
   test('read API rejects missing initData', async () => {
-    const mod = createArchiveModule({ env, notifier: { async notifyDeletion() {} } })
+    const mod = createArchiveModule({ env, notifier: { async notifyDeletion() {}, async notifyEdit() {}, async notifyBatchDeletion() {} } })
     const res = await mod.readRoutes.request('/overview')
     expect(res.status).toBe(401)
   })

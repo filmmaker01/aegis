@@ -2,13 +2,26 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 
 import { InMemoryArchiveRepository } from '../infrastructure/in-memory-repository'
 import { IngestService } from './ingest-service'
-import type { DeletionNotification, Notifier } from './ports'
+import type {
+  BatchDeletionNotification,
+  DeletionNotification,
+  EditNotification,
+  Notifier,
+} from './ports'
 import type { IncomingBusinessConnection, IncomingMessage } from '../domain/types'
 
 class RecordingNotifier implements Notifier {
   readonly calls: DeletionNotification[] = []
+  readonly edits: EditNotification[] = []
+  readonly batches: BatchDeletionNotification[] = []
   async notifyDeletion(n: DeletionNotification): Promise<void> {
     this.calls.push(n)
+  }
+  async notifyEdit(n: EditNotification): Promise<void> {
+    this.edits.push(n)
+  }
+  async notifyBatchDeletion(n: BatchDeletionNotification): Promise<void> {
+    this.batches.push(n)
   }
 }
 
@@ -132,14 +145,46 @@ describe('IngestService', () => {
     expect(notifier.calls).toHaveLength(1)
   })
 
-  test('batch deletion records each id and notifies per archived message', async () => {
+  test('bulk deletion is grouped into ONE batch card (not N messages)', async () => {
     await svc.onBusinessMessage(msg(1, 'a'))
     await svc.onBusinessMessage(msg(2, 'b'))
     await svc.onDeletedBusinessMessages({ connectionId: CONN, tgChatId: CHAT, tgMessageIds: [1, 2, 3] })
-    // ids 1 & 2 archived, id 3 not archived
-    expect(notifier.calls).toHaveLength(3)
-    const archivedFlags = notifier.calls.map((c) => c.archived).sort()
-    expect(archivedFlags).toEqual([false, true, true])
+    // 3 newly-created events -> one grouped card, no per-message deletion cards.
+    expect(notifier.calls).toHaveLength(0)
+    expect(notifier.batches).toHaveLength(1)
+    expect(notifier.batches[0]?.count).toBe(3)
+    expect(notifier.batches[0]?.ownerTgChatId).toBe(OWNER_CHAT)
+    // previews include the archived saved texts (first ≤5)
+    const texts = notifier.batches[0]?.previews.map((p) => p.savedText)
+    expect(texts).toContain('a')
+    expect(texts).toContain('b')
+  })
+
+  test('single deletion keeps a single full card (not batched)', async () => {
+    await svc.onBusinessMessage(msg(1, 'only one'))
+    await svc.onDeletedBusinessMessages({ connectionId: CONN, tgChatId: CHAT, tgMessageIds: [1] })
+    expect(notifier.calls).toHaveLength(1)
+    expect(notifier.batches).toHaveLength(0)
+    expect(notifier.calls[0]?.savedText).toBe('only one')
+    expect(notifier.calls[0]?.eventId).toBeTruthy()
+  })
+
+  test('edit emits an edit notification with before/after', async () => {
+    await svc.onBusinessMessage(msg(1, 'before text'))
+    await svc.onEditedBusinessMessage(msg(1, 'after text', { editDate: new Date('2026-07-14T10:01:00Z') }))
+    expect(notifier.edits).toHaveLength(1)
+    expect(notifier.edits[0]?.before).toBe('before text')
+    expect(notifier.edits[0]?.after).toBe('after text')
+    expect(notifier.edits[0]?.messageId).toBeTruthy()
+    expect(notifier.edits[0]?.ownerTgChatId).toBe(OWNER_CHAT)
+  })
+
+  test('idempotent edit re-delivery does not emit a second edit notification', async () => {
+    await svc.onBusinessMessage(msg(1, 'before text'))
+    const edited = msg(1, 'after text', { editDate: new Date('2026-07-14T10:01:00Z') })
+    await svc.onEditedBusinessMessage(edited)
+    await svc.onEditedBusinessMessage(edited)
+    expect(notifier.edits).toHaveLength(1)
   })
 
   test('tombstone: delete before message -> message marked deleted on arrival + notified', async () => {

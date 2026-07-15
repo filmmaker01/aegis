@@ -9,7 +9,11 @@ import { MediaDownloadService } from './download-service'
 import type { MediaStorage } from './storage'
 import type { IncomingBusinessConnection, IncomingMessage } from '../domain/types'
 
-const noopNotifier: Notifier = { async notifyDeletion() {} }
+const noopNotifier: Notifier = {
+  async notifyDeletion() {},
+  async notifyEdit() {},
+  async notifyBatchDeletion() {},
+}
 const CONN = 'conn-1'
 const CHAT = 5001
 const now = new Date('2026-07-15T12:00:00Z')

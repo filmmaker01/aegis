@@ -3,6 +3,7 @@ import type {
   IncomingBusinessConnection,
   IncomingMessage,
   MediaItem,
+  MediaType,
   MessageDirection,
   StoredConnection,
   StoredMessage,
@@ -149,24 +150,60 @@ export interface VersionRow {
   at: Date | null
 }
 
-export interface DeletionNotification {
+interface NotificationBase {
   connectionId: string
   /** Telegram chat id to send the notification to (the owner's chat with the bot). */
   ownerTgChatId: number
   tgChatId: number
+  /** When the event was detected/rendered — used for the card timestamp. */
+  at: Date
+  /** Peer display labels for the card (chat title / @username). */
+  peerTitle?: string | null
+  peerUsername?: string | null
+}
+
+export interface DeletionNotification extends NotificationBase {
   tgMessageId: number
+  /** Deletion event id — carried by the card's action buttons. */
+  eventId: string
+  /** Internal archived message id, or null for an unarchived deletion. */
+  messageId: string | null
   /** Saved text of the deleted message, if we had archived it. */
   savedText?: string | null
   hasMedia: boolean
+  /** True when the message has more than one stored version (offer history). */
+  hasHistory: boolean
   /** Stored media (state=stored) to send back; empty if none stored yet. */
   media: StoredMediaRef[]
   /** False when the deleted message was never in our archive (e.g. pre-connection history). */
   archived: boolean
-  peerLabel?: string | null
+}
+
+export interface EditNotification extends NotificationBase {
+  tgMessageId: number
+  /** Internal archived message id — carried by the card's action buttons. */
+  messageId: string
+  before: string | null
+  after: string | null
+}
+
+export interface BatchDeletionPreview {
+  savedText?: string | null
+  mediaTypes?: MediaType[]
+}
+
+export interface BatchDeletionNotification extends NotificationBase {
+  /** A representative deletion event id (for the "open archive" button). */
+  eventId: string
+  count: number
+  /** First few previews (the notifier caps how many it renders). */
+  previews: BatchDeletionPreview[]
 }
 
 export interface Notifier {
   notifyDeletion(notification: DeletionNotification): Promise<void>
+  notifyEdit(notification: EditNotification): Promise<void>
+  notifyBatchDeletion(notification: BatchDeletionNotification): Promise<void>
 }
 
 /**

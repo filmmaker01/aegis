@@ -5,7 +5,11 @@ import type { Notifier } from '../archive/application/ports'
 import { InMemoryArchiveRepository } from '../archive/infrastructure/in-memory-repository'
 import { dispatchUpdate, toIncomingMessage, type RawUpdate } from './updates'
 
-const noopNotifier: Notifier = { async notifyDeletion() {} }
+const noopNotifier: Notifier = {
+  async notifyDeletion() {},
+  async notifyEdit() {},
+  async notifyBatchDeletion() {},
+}
 const CONN = 'gPOdZrconn0000000000000000'
 const OWNER = 700
 const PARTNER = 5001

@@ -6,7 +6,11 @@ import { QueryService } from './query-service'
 import type { Notifier } from './ports'
 import type { IncomingBusinessConnection, IncomingMessage } from '../domain/types'
 
-const noopNotifier: Notifier = { async notifyDeletion() {} }
+const noopNotifier: Notifier = {
+  async notifyDeletion() {},
+  async notifyEdit() {},
+  async notifyBatchDeletion() {},
+}
 const OWNER = 700
 const CONN = 'conn-1'
 const CHAT = 5001

@@ -2,9 +2,19 @@ import type {
   IncomingBusinessConnection,
   IncomingDeletion,
   IncomingMessage,
+  MediaType,
+  StoredConnection,
+  StoredMessage,
 } from '../domain/types'
 import type { ArchiveRepository, Clock, ConnectionFetcher, Notifier } from './ports'
 import type { MediaRepository } from './media-ports'
+
+/** One newly-recorded deletion, collected while processing a delete update. */
+interface RecordedDeletion {
+  eventId: string
+  message: StoredMessage | null
+  tgMessageId: number
+}
 
 export interface IngestServiceDeps {
   repository: ArchiveRepository
@@ -104,9 +114,23 @@ export class IngestService {
     if (input.media.length > 0) this.mediaTrigger?.()
 
     // Tombstone reconciliation: a deletion may have arrived before this message.
+    // Now that content exists, re-send a single card with the saved copy.
     if (await this.repo.hasDeletion(input.connectionId, input.tgChatId, input.tgMessageId)) {
-      await this.repo.markMessageDeleted(input.connectionId, input.tgChatId, input.tgMessageId)
-      await this.notifyDeletion(input.connectionId, input.tgChatId, input.tgMessageId)
+      const now = this.clock.now()
+      const res = await this.repo.recordDeletion(input.connectionId, input.tgChatId, input.tgMessageId, now)
+      if (!res.eventId || (!res.message && !this.notifyUnarchived)) return
+      const connection = await this.repo.getConnection(input.connectionId)
+      if (!connection) return
+      const peer = await this.repo.getChatPeer(input.connectionId, input.tgChatId)
+      await this.sendSingleDeletion(
+        connection,
+        input.connectionId,
+        input.tgChatId,
+        { eventId: res.eventId, message: res.message, tgMessageId: input.tgMessageId },
+        peer,
+        now,
+      )
+      await this.repo.markDeletionNotified(input.connectionId, input.tgChatId, input.tgMessageId, this.clock.now())
     }
   }
 
@@ -115,7 +139,10 @@ export class IngestService {
       console.error(`[ingest] edited message_id=${input.tgMessageId} skipped=no_connection`)
       return
     }
-    await this.repo.saveMessageVersion({
+    // Capture prior state so we can (a) show before/after and (b) tell a real
+    // edit apart from an idempotent re-delivery (which appends no new version).
+    const prior = await this.repo.findMessage(input.connectionId, input.tgChatId, input.tgMessageId)
+    const stored = await this.repo.saveMessageVersion({
       connectionId: input.connectionId,
       tgChatId: input.tgChatId,
       tgMessageId: input.tgMessageId,
@@ -131,6 +158,25 @@ export class IngestService {
       raw: input.raw,
     })
     if (input.media.length > 0) this.mediaTrigger?.()
+
+    // Notify only when a genuinely new version was appended over a message we
+    // already had (so we have a real "before"). First-seen or duplicate → skip.
+    if (prior && stored.versionCount > prior.versionCount) {
+      const connection = await this.repo.getConnection(input.connectionId)
+      if (!connection) return
+      await this.notifier.notifyEdit({
+        connectionId: input.connectionId,
+        ownerTgChatId: connection.tgUserChatId,
+        tgChatId: input.tgChatId,
+        tgMessageId: input.tgMessageId,
+        messageId: stored.id,
+        before: prior.currentText ?? null,
+        after: stored.currentText ?? null,
+        peerTitle: input.peerTitle ?? null,
+        peerUsername: input.peerUsername ?? null,
+        at: input.editDate ?? this.clock.now(),
+      })
+    }
   }
 
   async onDeletedBusinessMessages(input: IncomingDeletion): Promise<void> {
@@ -141,47 +187,101 @@ export class IngestService {
       return
     }
     const now = this.clock.now()
+
+    // Record every id first; collect only the newly-created events (idempotency:
+    // re-delivered deletes create nothing and must not re-notify).
+    const created: RecordedDeletion[] = []
     for (const tgMessageId of input.tgMessageIds) {
-      const { created } = await this.repo.recordDeletion(
-        input.connectionId,
-        input.tgChatId,
-        tgMessageId,
-        now,
-      )
-      if (created) {
-        await this.notifyDeletion(input.connectionId, input.tgChatId, tgMessageId)
+      const res = await this.repo.recordDeletion(input.connectionId, input.tgChatId, tgMessageId, now)
+      if (res.created && res.eventId) {
+        created.push({ eventId: res.eventId, message: res.message, tgMessageId })
       }
+    }
+
+    const toNotify = created.filter((c) => this.notifyUnarchived || c.message !== null)
+    if (toNotify.length === 0) return
+
+    const connection = await this.repo.getConnection(input.connectionId)
+    if (!connection) {
+      console.error(`[notify] chat=${input.tgChatId} skipped=no_connection (user_chat_id unknown)`)
+      return
+    }
+    const peer = await this.repo.getChatPeer(input.connectionId, input.tgChatId)
+
+    // Group a bulk delete into ONE card; a single deletion keeps its full card.
+    if (toNotify.length === 1) {
+      await this.sendSingleDeletion(connection, input.connectionId, input.tgChatId, toNotify[0]!, peer, now)
+    } else {
+      await this.sendBatchDeletion(connection, input.connectionId, input.tgChatId, toNotify, peer, now)
+    }
+
+    for (const c of toNotify) {
+      await this.repo.markDeletionNotified(input.connectionId, input.tgChatId, c.tgMessageId, this.clock.now())
     }
   }
 
-  private async notifyDeletion(
+  private async sendSingleDeletion(
+    connection: StoredConnection,
     connectionId: string,
     tgChatId: number,
-    tgMessageId: number,
+    c: RecordedDeletion,
+    peer: { peerTitle: string | null; peerUsername: string | null } | null,
+    at: Date,
   ): Promise<void> {
-    const connection = await this.repo.getConnection(connectionId)
-    if (!connection) {
-      console.error(`[notify] message_id=${tgMessageId} skipped=no_connection (user_chat_id unknown)`)
-      return
-    }
-    const message = await this.repo.findMessage(connectionId, tgChatId, tgMessageId)
+    const message = c.message
     const archived = message !== null
-    if (!archived && !this.notifyUnarchived) return
-
-    const media = this.mediaReader
-      ? await this.mediaReader.getStoredMediaForMessage(connectionId, tgChatId, tgMessageId)
-      : []
-
+    const media =
+      archived && this.mediaReader
+        ? await this.mediaReader.getStoredMediaForMessage(connectionId, tgChatId, c.tgMessageId)
+        : []
     await this.notifier.notifyDeletion({
       connectionId,
       ownerTgChatId: connection.tgUserChatId,
       tgChatId,
-      tgMessageId,
+      tgMessageId: c.tgMessageId,
+      eventId: c.eventId,
+      messageId: message?.id ?? null,
       savedText: message?.currentText ?? null,
       hasMedia: message?.hasMedia ?? false,
+      hasHistory: (message?.versionCount ?? 0) > 1,
       media,
       archived,
+      peerTitle: peer?.peerTitle ?? null,
+      peerUsername: peer?.peerUsername ?? null,
+      at,
     })
-    await this.repo.markDeletionNotified(connectionId, tgChatId, tgMessageId, this.clock.now())
+  }
+
+  private async sendBatchDeletion(
+    connection: StoredConnection,
+    connectionId: string,
+    tgChatId: number,
+    created: RecordedDeletion[],
+    peer: { peerTitle: string | null; peerUsername: string | null } | null,
+    at: Date,
+  ): Promise<void> {
+    // The card renders only the first few previews; resolve those cheaply.
+    const previews = await Promise.all(
+      created.slice(0, 5).map(async (c) => {
+        const message = c.message
+        let mediaTypes: MediaType[] = []
+        if (message && message.hasMedia && this.mediaReader) {
+          const media = await this.mediaReader.getStoredMediaForMessage(connectionId, tgChatId, c.tgMessageId)
+          mediaTypes = media.map((m) => m.type)
+        }
+        return { savedText: message?.currentText ?? null, mediaTypes }
+      }),
+    )
+    await this.notifier.notifyBatchDeletion({
+      connectionId,
+      ownerTgChatId: connection.tgUserChatId,
+      tgChatId,
+      eventId: created[0]!.eventId,
+      count: created.length,
+      previews,
+      peerTitle: peer?.peerTitle ?? null,
+      peerUsername: peer?.peerUsername ?? null,
+      at,
+    })
   }
 }

@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 
 import { createPrisma, type DbClient } from '../../../db'
 import { IngestService } from '../application/ingest-service'
-import type { DeletionNotification, Notifier } from '../application/ports'
+import type {
+  BatchDeletionNotification,
+  DeletionNotification,
+  EditNotification,
+  Notifier,
+} from '../application/ports'
 import { QueryService } from '../application/query-service'
 import type { IncomingBusinessConnection, IncomingMessage } from '../domain/types'
 import { PrismaArchiveRepository } from './prisma-archive-repository'
@@ -19,8 +24,16 @@ const d = shouldRun ? describe : describe.skip
 
 class RecordingNotifier implements Notifier {
   readonly calls: DeletionNotification[] = []
+  readonly edits: EditNotification[] = []
+  readonly batches: BatchDeletionNotification[] = []
   async notifyDeletion(n: DeletionNotification): Promise<void> {
     this.calls.push(n)
+  }
+  async notifyEdit(n: EditNotification): Promise<void> {
+    this.edits.push(n)
+  }
+  async notifyBatchDeletion(n: BatchDeletionNotification): Promise<void> {
+    this.batches.push(n)
   }
 }
 
