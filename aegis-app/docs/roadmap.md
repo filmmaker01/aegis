@@ -32,10 +32,19 @@ Done (continued):
   `bun run test:pg`); backend switched to `ARCHIVE_STORE=postgres`; durability verified
   (data survives a full backend restart). See `local-postgres.md`.
 
+Done (continued):
+- ✅ **Media archival worker**: download-on-arrival via `getFile` (checksum, max-size cap,
+  retry, idempotency), local-disk + S3 storage; deletion re-sends the saved copy via
+  sendPhoto/sendVoice/sendVideo/sendDocument to the owner's `user_chat_id`, honest text
+  fallback. **Live e2e passed** for photo/voice/video/document — see `../../docs/live-media-e2e.md`.
+  Production S3/Supabase config: `media-storage-production.md`.
+- ✅ Connection self-heal (`getBusinessConnection`) in all handlers (fixed a Postgres-only 500).
+
 Remaining before Phase 2 is "done":
-- ⏳ Media archival worker (download `getFile` → storage) — schema/ports exist, worker TBD.
 - ⏳ Formal Prisma migrations (currently `db push`) + managed Postgres for production.
+- ⏳ Media retention/GC (delete bucket object with the row); background sweeper for pending media.
 - ⏳ Notification polish (quiet hours, batching, mute per chat); optional edit notifications.
+- ⏳ Real S3/Supabase deployment (config prepared; needs a bucket + keys).
 
 ## Phase 3 — Beta
 - Edited history, Chats/Settings/Subscription screens, billing, retention, legal review.
