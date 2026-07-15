@@ -5,6 +5,8 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  // Connection URLs are provided via prisma.config.ts (runtime pooled url + directUrl
+  // for migrations). Prisma 7 no longer accepts url/directUrl in the schema file.
 }
 
 model User {
