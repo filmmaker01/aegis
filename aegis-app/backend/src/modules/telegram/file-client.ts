@@ -9,12 +9,27 @@ export interface SendResult {
   ok: boolean
   status: number
   description?: string
+  /** message_id of the sent message, when the API returned one. */
+  messageId?: number
+}
+
+/** Structural inline-keyboard shape (matches the notification format module). */
+export interface InlineKeyboardMarkup {
+  inline_keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>>
+}
+
+export interface SendMessageOptions {
+  parseMode?: 'HTML' | 'MarkdownV2'
+  replyMarkup?: InlineKeyboardMarkup
+  disablePreview?: boolean
 }
 
 export interface SendMediaOptions {
   filename?: string
   contentType?: string
   caption?: string
+  parseMode?: 'HTML' | 'MarkdownV2'
+  replyMarkup?: InlineKeyboardMarkup
 }
 
 /** Maps a media type to the Bot API send method + multipart field name. */
@@ -72,6 +87,8 @@ export class TelegramFileClient {
     const form = new FormData()
     form.append('chat_id', String(chatId))
     if (spec.caption && options.caption) form.append('caption', options.caption)
+    if (spec.caption && options.caption && options.parseMode) form.append('parse_mode', options.parseMode)
+    if (options.replyMarkup) form.append('reply_markup', JSON.stringify(options.replyMarkup))
     const blob = new Blob([new Uint8Array(bytes)], {
       type: options.contentType ?? 'application/octet-stream',
     })
@@ -81,24 +98,75 @@ export class TelegramFileClient {
       method: 'POST',
       body: form,
     })
-    const json = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string }
-    return { ok: res.ok && json.ok === true, status: res.status, description: json.description }
+    return toSendResult(res)
   }
 
-  /** Plain text message (used for fallback notifications). */
-  async sendMessage(chatId: number, text: string): Promise<SendResult> {
+  /** Text message. Supports HTML/MarkdownV2 parse mode and an inline keyboard. */
+  async sendMessage(chatId: number, text: string, options: SendMessageOptions = {}): Promise<SendResult> {
+    const body: Record<string, unknown> = {
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: options.disablePreview ?? true,
+    }
+    if (options.parseMode) body.parse_mode = options.parseMode
+    if (options.replyMarkup) body.reply_markup = options.replyMarkup
     const res = await fetch(`${this.apiRoot}/bot${this.botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+      body: JSON.stringify(body),
     })
-    const json = (await res.json().catch(() => ({}))) as { ok?: boolean; description?: string }
-    return { ok: res.ok && json.ok === true, status: res.status, description: json.description }
+    return toSendResult(res)
+  }
+
+  /** Acknowledge a callback query (stops the client spinner; optional toast/alert). */
+  async answerCallbackQuery(
+    callbackQueryId: string,
+    options: { text?: string; showAlert?: boolean } = {},
+  ): Promise<SendResult> {
+    const body: Record<string, unknown> = { callback_query_id: callbackQueryId }
+    if (options.text) body.text = options.text
+    if (options.showAlert) body.show_alert = true
+    const res = await fetch(`${this.apiRoot}/bot${this.botToken}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return toSendResult(res)
+  }
+
+  /** Replace (or clear) the inline keyboard on an existing message. */
+  async editMessageReplyMarkup(
+    chatId: number,
+    messageId: number,
+    replyMarkup: InlineKeyboardMarkup | null,
+  ): Promise<SendResult> {
+    const body: Record<string, unknown> = { chat_id: chatId, message_id: messageId }
+    if (replyMarkup) body.reply_markup = replyMarkup
+    const res = await fetch(`${this.apiRoot}/bot${this.botToken}/editMessageReplyMarkup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return toSendResult(res)
   }
 
   /** Whether this media type supports a caption on send. */
   static supportsCaption(type: MediaType): boolean {
     return SEND_SPEC[type].caption
+  }
+}
+
+async function toSendResult(res: Response): Promise<SendResult> {
+  const json = (await res.json().catch(() => ({}))) as {
+    ok?: boolean
+    description?: string
+    result?: { message_id?: number }
+  }
+  return {
+    ok: res.ok && json.ok === true,
+    status: res.status,
+    description: json.description,
+    ...(typeof json.result?.message_id === 'number' ? { messageId: json.result.message_id } : {}),
   }
 }
 
