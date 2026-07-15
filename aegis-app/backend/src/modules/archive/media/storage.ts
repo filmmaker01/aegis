@@ -27,7 +27,7 @@ export class LocalDiskMediaStorage implements MediaStorage {
     return join(this.baseDir, key)
   }
 
-  async put(key: string, bytes: Buffer): Promise<void> {
+  async put(key: string, bytes: Buffer, _contentType?: string): Promise<void> {
     const path = this.pathFor(key)
     await mkdir(dirname(path), { recursive: true })
     await writeFile(path, bytes)
