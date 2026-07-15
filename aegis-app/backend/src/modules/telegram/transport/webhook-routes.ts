@@ -2,13 +2,15 @@ import { Hono } from 'hono'
 
 import type { IngestService } from '../../archive/application/ingest-service'
 import { recordWebhookError } from '../../../monitoring'
-import { dispatchUpdate, type RawUpdate } from '../updates'
+import { dispatchUpdate, type CallbackHandler, type RawUpdate } from '../updates'
 
 const SECRET_HEADER = 'x-telegram-bot-api-secret-token'
 
 export interface WebhookRoutesOptions {
   ingest: IngestService
   webhookSecret: string | undefined
+  /** Handles inline-button presses (callback_query). Optional (no bot token = no client). */
+  callback?: CallbackHandler
 }
 
 /**
@@ -17,7 +19,7 @@ export interface WebhookRoutesOptions {
  * so Telegram retries (idempotency via update_id makes retries safe). Returns
  * 401 on a bad/missing secret so forged requests can't reach ingestion.
  */
-export function createWebhookRoutes({ ingest, webhookSecret }: WebhookRoutesOptions) {
+export function createWebhookRoutes({ ingest, webhookSecret, callback }: WebhookRoutesOptions) {
   const app = new Hono()
 
   app.post('/', async (c) => {
@@ -39,7 +41,7 @@ export function createWebhookRoutes({ ingest, webhookSecret }: WebhookRoutesOpti
     }
 
     try {
-      const handled = await dispatchUpdate(update, ingest)
+      const handled = await dispatchUpdate(update, ingest, callback)
       return c.json({ ok: true, handled }, 200)
     } catch (err) {
       recordWebhookError()

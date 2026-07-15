@@ -3,7 +3,14 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { IngestService } from '../archive/application/ingest-service'
 import type { Notifier } from '../archive/application/ports'
 import { InMemoryArchiveRepository } from '../archive/infrastructure/in-memory-repository'
-import { dispatchUpdate, toIncomingMessage, type RawUpdate } from './updates'
+import {
+  dispatchUpdate,
+  toIncomingCallback,
+  toIncomingMessage,
+  type CallbackHandler,
+  type RawUpdate,
+} from './updates'
+import type { IncomingCallback } from '../archive/domain/types'
 
 const noopNotifier: Notifier = {
   async notifyDeletion() {},
@@ -95,6 +102,41 @@ describe('dispatchUpdate', () => {
     expect(parsed?.media).toHaveLength(1)
     expect(parsed?.media[0]?.tgFileId).toBe('large') // largest variant
     expect(parsed?.media[0]?.type).toBe('photo')
+  })
+
+  test('callback_query routes to the callback handler', async () => {
+    const seen: IncomingCallback[] = []
+    const handler: CallbackHandler = {
+      async handle(c) {
+        seen.push(c)
+      },
+    }
+    const update: RawUpdate = {
+      update_id: 50,
+      callback_query: {
+        id: 'q1',
+        from: { id: OWNER },
+        message: { message_id: 111, chat: { id: OWNER, type: 'private' } },
+        data: 'restore:ev-123',
+      },
+    }
+    expect(await dispatchUpdate(update, ingest, handler)).toBe('callback_query')
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.data).toBe('restore:ev-123')
+    expect(seen[0]?.fromTgId).toBe(OWNER)
+  })
+
+  test('callback_query without a handler is a no-op (still handled)', async () => {
+    const update: RawUpdate = {
+      update_id: 51,
+      callback_query: { id: 'q2', from: { id: OWNER }, message: { message_id: 1, chat: { id: OWNER } }, data: 'archive:x' },
+    }
+    expect(await dispatchUpdate(update, ingest)).toBe('callback_query')
+  })
+
+  test('toIncomingCallback returns null on incomplete payloads', () => {
+    expect(toIncomingCallback({ id: 'x', data: 'restore:1' })).toBeNull() // no from/message
+    expect(toIncomingCallback({ id: 'x', from: { id: 1 }, message: { message_id: 1, chat: { id: 2 } }, data: 'ok' })).not.toBeNull()
   })
 
   test('outgoing detection via sender_business_bot', () => {

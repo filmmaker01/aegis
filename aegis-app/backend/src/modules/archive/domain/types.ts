@@ -62,6 +62,24 @@ export interface IncomingDeletion {
   tgMessageIds: number[]
 }
 
+/**
+ * A parsed callback_query from an inline button press in the owner's chat with
+ * the bot. `chatId`/`messageId` identify the message the button lives on (the
+ * owner's own chat), and `fromTgId` is the presser — checked against the owner.
+ */
+export interface IncomingCallback {
+  /** callback_query.id — echoed back to answerCallbackQuery. */
+  id: string
+  /** callback_query.from.id — the Telegram user who pressed the button. */
+  fromTgId: number
+  /** Chat the button message lives in (the owner's chat with the bot). */
+  chatId: number
+  /** message_id of the button message. */
+  messageId: number
+  /** callback_data payload (action:parts…). */
+  data: string
+}
+
 /** A message as currently stored (returned by the repository). */
 export interface StoredMessage {
   /** Internal storage id (uuid) — used to reference the message from callbacks. */

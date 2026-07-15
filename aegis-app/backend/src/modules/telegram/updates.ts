@@ -1,11 +1,17 @@
 import type { IngestService } from '../archive/application/ingest-service'
 import type {
   IncomingBusinessConnection,
+  IncomingCallback,
   IncomingDeletion,
   IncomingMessage,
   MediaItem,
   MediaType,
 } from '../archive/domain/types'
+
+/** Handles a parsed callback_query (implemented by the archive CallbackService). */
+export interface CallbackHandler {
+  handle(cb: IncomingCallback): Promise<void>
+}
 
 /** Minimal raw Telegram shapes (permissive — we only read what we map). */
 interface RawUser {
@@ -61,12 +67,20 @@ interface RawDeleted {
   chat: RawChat
   message_ids: number[]
 }
+interface RawCallbackQuery {
+  id: string
+  from?: RawUser
+  message?: { message_id: number; chat?: RawChat }
+  data?: string
+  [k: string]: unknown
+}
 export interface RawUpdate {
   update_id: number
   business_connection?: RawBusinessConnection
   business_message?: RawMessage
   edited_business_message?: RawMessage
   deleted_business_messages?: RawDeleted
+  callback_query?: RawCallbackQuery
   [k: string]: unknown
 }
 
@@ -162,6 +176,17 @@ export function toIncomingDeletion(d: RawDeleted): IncomingDeletion {
   }
 }
 
+export function toIncomingCallback(cq: RawCallbackQuery): IncomingCallback | null {
+  if (!cq.id || !cq.from || !cq.data || !cq.message?.chat) return null
+  return {
+    id: cq.id,
+    fromTgId: cq.from.id,
+    chatId: cq.message.chat.id,
+    messageId: cq.message.message_id,
+    data: cq.data,
+  }
+}
+
 /**
  * Routes a raw Update to the ingest service. Applies update-level idempotency
  * (claimUpdate) so replayed updates are ignored. Returns the handled type or null.
@@ -169,6 +194,7 @@ export function toIncomingDeletion(d: RawDeleted): IncomingDeletion {
 export async function dispatchUpdate(
   update: RawUpdate,
   ingest: IngestService,
+  callback?: CallbackHandler,
 ): Promise<string | null> {
   if (typeof update.update_id !== 'number') return null
   const claimed = await ingest.claim(update.update_id)
@@ -201,6 +227,13 @@ export async function dispatchUpdate(
     console.log(`[ingest] update_id=${update.update_id} type=deleted_business_messages count=${ids.length} message_ids=[${ids.join(',')}]`)
     await ingest.onDeletedBusinessMessages(toIncomingDeletion(update.deleted_business_messages))
     return 'deleted_business_messages'
+  }
+  if (update.callback_query) {
+    // Never log callback_data (it carries an opaque id) — only the type.
+    console.log(`[ingest] update_id=${update.update_id} type=callback_query`)
+    const parsed = toIncomingCallback(update.callback_query)
+    if (parsed && callback) await callback.handle(parsed)
+    return 'callback_query'
   }
   console.log(`[ingest] update_id=${update.update_id} type=ignored`)
   return 'ignored'

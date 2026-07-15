@@ -7,6 +7,7 @@ import type { QueryRepository } from './application/query-ports'
 import { QueryService } from './application/query-service'
 import { InMemoryArchiveRepository } from './infrastructure/in-memory-repository'
 import { PrismaArchiveRepository } from './infrastructure/prisma-archive-repository'
+import { CallbackService } from './infrastructure/callback-service'
 import { TelegramConnectionFetcher } from './infrastructure/telegram-connection-fetcher'
 import { TelegramNotifier, noopNotifier } from './infrastructure/telegram-notifier'
 import { MediaDownloadService } from './media/download-service'
@@ -83,12 +84,22 @@ export function createArchiveModule({
   })
   const query = new QueryService(repository)
 
-  const webhookRoutes = createWebhookRoutes({ ingest, webhookSecret: env.TELEGRAM_WEBHOOK_SECRET })
+  // Inline-button (callback_query) handler — enforces owner-only access and
+  // re-sends restored content to the owner's chat. Only when a bot token exists.
+  const callback = fileClient
+    ? new CallbackService(repository, fileClient, mediaStorage)
+    : undefined
+
+  const webhookRoutes = createWebhookRoutes({
+    ingest,
+    webhookSecret: env.TELEGRAM_WEBHOOK_SECRET,
+    callback,
+  })
   const readRoutes = createReadRoutes({
     query,
     botToken: env.TELEGRAM_BOT_TOKEN,
     initDataMaxAgeSeconds: env.TELEGRAM_INITDATA_MAX_AGE_SECONDS ?? 3600,
   })
 
-  return { ingest, query, repository, mediaWorker, webhookRoutes, readRoutes }
+  return { ingest, query, repository, mediaWorker, callback, webhookRoutes, readRoutes }
 }
