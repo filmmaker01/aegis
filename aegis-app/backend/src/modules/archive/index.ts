@@ -4,6 +4,7 @@ import { IngestService } from './application/ingest-service'
 import type { ArchiveRepository, Clock, Notifier } from './application/ports'
 import type { MediaRepository } from './application/media-ports'
 import type { QueryRepository } from './application/query-ports'
+import type { NotificationSettingsRepository } from './application/settings-ports'
 import { QueryService } from './application/query-service'
 import { InMemoryArchiveRepository } from './infrastructure/in-memory-repository'
 import { PrismaArchiveRepository } from './infrastructure/prisma-archive-repository'
@@ -37,7 +38,10 @@ export function createArchiveModule({
   clock = systemClock,
   notifier,
 }: CreateArchiveModuleOptions) {
-  const repository: ArchiveRepository & QueryRepository & MediaRepository = db
+  const repository: ArchiveRepository &
+    QueryRepository &
+    MediaRepository &
+    NotificationSettingsRepository = db
     ? new PrismaArchiveRepository(db)
     : new InMemoryArchiveRepository(clock.now)
 
@@ -81,6 +85,7 @@ export function createArchiveModule({
     connectionFetcher,
     mediaTrigger,
     mediaReader: repository,
+    settings: repository,
   })
   const query = new QueryService(repository)
 

@@ -27,6 +27,11 @@ import {
   type PendingMediaJob,
   type StoredMediaRef,
 } from '../application/media-ports'
+import {
+  DEFAULT_NOTIFICATION_SETTINGS,
+  type NotificationSettings,
+  type NotificationSettingsRepository,
+} from '../application/settings-ports'
 import type { MediaType } from '../domain/types'
 
 /**
@@ -47,7 +52,7 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 export class PrismaArchiveRepository
-  implements ArchiveRepository, QueryRepository, MediaRepository
+  implements ArchiveRepository, QueryRepository, MediaRepository, NotificationSettingsRepository
 {
   constructor(private readonly db: DbClient) {}
 
@@ -457,6 +462,49 @@ export class PrismaArchiveRepository
         }))
     } catch {
       return []
+    }
+  }
+
+  // ── Notification settings ────────────────────────────────────────────────────
+
+  async getSettings(connectionId: string): Promise<NotificationSettings> {
+    const conn = await this.connRow(connectionId)
+    if (!conn) return { ...DEFAULT_NOTIFICATION_SETTINGS }
+    const s = await this.db.notificationSettings.findUnique({ where: { connectionId: conn.id } })
+    if (!s) return { ...DEFAULT_NOTIFICATION_SETTINGS }
+    return {
+      notifyDeletions: s.notifyDeletions,
+      notifyEdits: s.notifyEdits,
+      notifyMedia: s.notifyMedia,
+      groupBatches: s.groupBatches,
+      mutedChats: s.mutedChats.map(num),
+    }
+  }
+
+  async updateSettings(
+    connectionId: string,
+    patch: Partial<NotificationSettings>,
+  ): Promise<NotificationSettings> {
+    const conn = await this.connRow(connectionId)
+    if (!conn) return { ...DEFAULT_NOTIFICATION_SETTINGS, ...patch }
+    const data = {
+      ...(patch.notifyDeletions !== undefined ? { notifyDeletions: patch.notifyDeletions } : {}),
+      ...(patch.notifyEdits !== undefined ? { notifyEdits: patch.notifyEdits } : {}),
+      ...(patch.notifyMedia !== undefined ? { notifyMedia: patch.notifyMedia } : {}),
+      ...(patch.groupBatches !== undefined ? { groupBatches: patch.groupBatches } : {}),
+      ...(patch.mutedChats !== undefined ? { mutedChats: patch.mutedChats.map(big) } : {}),
+    }
+    const s = await this.db.notificationSettings.upsert({
+      where: { connectionId: conn.id },
+      create: { connectionId: conn.id, ...data },
+      update: data,
+    })
+    return {
+      notifyDeletions: s.notifyDeletions,
+      notifyEdits: s.notifyEdits,
+      notifyMedia: s.notifyMedia,
+      groupBatches: s.groupBatches,
+      mutedChats: s.mutedChats.map(num),
     }
   }
 

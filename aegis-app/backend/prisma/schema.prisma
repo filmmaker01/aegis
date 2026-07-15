@@ -57,9 +57,28 @@ model BusinessConnection {
   chats    Chat[]
   messages ArchivedMessage[]
   deletes  DeletedEvent[]
+  settings NotificationSettings?
 
   @@index([ownerTgUserId], map: "business_connections_owner_idx")
   @@map("business_connections")
+}
+
+// Per-connection owner preferences for the chat notifications. Defaults are all
+// "on"; usable now directly via the DB, and ready for a Mini App settings UI.
+model NotificationSettings {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  connectionId    String   @unique @db.Uuid @map("connection_id")
+  notifyDeletions Boolean  @default(true) @map("notify_deletions")
+  notifyEdits     Boolean  @default(true) @map("notify_edits")
+  notifyMedia     Boolean  @default(true) @map("notify_media")
+  groupBatches    Boolean  @default(true) @map("group_batches")
+  mutedChats      BigInt[] @default([]) @map("muted_chats") // tg_chat_ids to silence
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  connection BusinessConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@map("notification_settings")
 }
 
 model Chat {

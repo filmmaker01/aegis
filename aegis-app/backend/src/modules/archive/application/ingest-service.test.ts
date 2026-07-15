@@ -212,3 +212,74 @@ describe('IngestService', () => {
     expect((await repo.getConnection(CONN))?.state).toBe('revoked')
   })
 })
+
+describe('IngestService notification settings', () => {
+  let sRepo: InMemoryArchiveRepository
+  let sNotifier: RecordingNotifier
+  let sSvc: IngestService
+
+  beforeEach(async () => {
+    sRepo = new InMemoryArchiveRepository(() => fixedNow)
+    sNotifier = new RecordingNotifier()
+    sSvc = new IngestService({
+      repository: sRepo,
+      notifier: sNotifier,
+      clock: { now: () => fixedNow },
+      mediaReader: sRepo,
+      settings: sRepo,
+    })
+    await sSvc.onBusinessConnection(connection)
+  })
+
+  test('muted chat suppresses deletion and edit notifications', async () => {
+    await sRepo.updateSettings(CONN, { mutedChats: [CHAT] })
+    await sSvc.onBusinessMessage(msg(1, 'hi'))
+    await sSvc.onEditedBusinessMessage(msg(1, 'hi there', { editDate: new Date('2026-07-14T10:01:00Z') }))
+    await sSvc.onDeletedBusinessMessages({ connectionId: CONN, tgChatId: CHAT, tgMessageIds: [1] })
+    expect(sNotifier.calls).toHaveLength(0)
+    expect(sNotifier.edits).toHaveLength(0)
+  })
+
+  test('notifyDeletions=false suppresses deletion cards', async () => {
+    await sRepo.updateSettings(CONN, { notifyDeletions: false })
+    await sSvc.onBusinessMessage(msg(1, 'hi'))
+    await sSvc.onDeletedBusinessMessages({ connectionId: CONN, tgChatId: CHAT, tgMessageIds: [1] })
+    expect(sNotifier.calls).toHaveLength(0)
+    expect(sNotifier.batches).toHaveLength(0)
+  })
+
+  test('notifyEdits=false suppresses edit cards but keeps deletions', async () => {
+    await sRepo.updateSettings(CONN, { notifyEdits: false })
+    await sSvc.onBusinessMessage(msg(1, 'hi'))
+    await sSvc.onEditedBusinessMessage(msg(1, 'hi 2', { editDate: new Date('2026-07-14T10:01:00Z') }))
+    expect(sNotifier.edits).toHaveLength(0)
+    await sSvc.onDeletedBusinessMessages({ connectionId: CONN, tgChatId: CHAT, tgMessageIds: [1] })
+    expect(sNotifier.calls).toHaveLength(1)
+  })
+
+  test('groupBatches=false sends one full card per deleted message', async () => {
+    await sRepo.updateSettings(CONN, { groupBatches: false })
+    await sSvc.onBusinessMessage(msg(1, 'a'))
+    await sSvc.onBusinessMessage(msg(2, 'b'))
+    await sSvc.onDeletedBusinessMessages({ connectionId: CONN, tgChatId: CHAT, tgMessageIds: [1, 2] })
+    expect(sNotifier.batches).toHaveLength(0)
+    expect(sNotifier.calls).toHaveLength(2)
+  })
+
+  test('notifyMedia=false sends the card without re-sending media', async () => {
+    await sRepo.updateSettings(CONN, { notifyMedia: false })
+    await sSvc.onBusinessMessage(
+      msg(1, 'with photo', { media: [{ type: 'photo', tgFileId: 'f1' }] }),
+    )
+    // store the media so it WOULD be attachable if notifyMedia were on
+    const [job] = await sRepo.listPendingMedia(10, 3)
+    await sRepo.claimMediaDownload(job!.mediaId)
+    await sRepo.markMediaStored(job!.mediaId, { storageKey: 'k/1', checksum: 'c', mimeType: 'image/jpeg' })
+
+    await sSvc.onDeletedBusinessMessages({ connectionId: CONN, tgChatId: CHAT, tgMessageIds: [1] })
+    expect(sNotifier.calls).toHaveLength(1)
+    expect(sNotifier.calls[0]?.media).toHaveLength(0)
+    // still reports that the message had media (honest), just doesn't re-send it
+    expect(sNotifier.calls[0]?.hasMedia).toBe(true)
+  })
+})

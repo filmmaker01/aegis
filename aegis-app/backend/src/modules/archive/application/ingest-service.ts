@@ -8,6 +8,11 @@ import type {
 } from '../domain/types'
 import type { ArchiveRepository, Clock, ConnectionFetcher, Notifier } from './ports'
 import type { MediaRepository } from './media-ports'
+import {
+  DEFAULT_NOTIFICATION_SETTINGS,
+  type NotificationSettings,
+  type NotificationSettingsRepository,
+} from './settings-ports'
 
 /** One newly-recorded deletion, collected while processing a delete update. */
 interface RecordedDeletion {
@@ -26,6 +31,8 @@ export interface IngestServiceDeps {
   mediaTrigger?: () => void
   /** Optional: reads stored media to attach to deletion notifications. */
   mediaReader?: Pick<MediaRepository, 'getStoredMediaForMessage'>
+  /** Optional: per-connection notification preferences. Defaults to all-on when absent. */
+  settings?: NotificationSettingsRepository
   /** Whether to notify the owner when a deletion has no archived content. Default true. */
   notifyUnarchivedDeletions?: boolean
 }
@@ -44,6 +51,7 @@ export class IngestService {
   private readonly connectionFetcher?: ConnectionFetcher
   private readonly mediaTrigger?: () => void
   private readonly mediaReader?: Pick<MediaRepository, 'getStoredMediaForMessage'>
+  private readonly settings?: NotificationSettingsRepository
   private readonly notifyUnarchived: boolean
 
   constructor(deps: IngestServiceDeps) {
@@ -53,7 +61,14 @@ export class IngestService {
     this.connectionFetcher = deps.connectionFetcher
     this.mediaTrigger = deps.mediaTrigger
     this.mediaReader = deps.mediaReader
+    this.settings = deps.settings
     this.notifyUnarchived = deps.notifyUnarchivedDeletions ?? true
+  }
+
+  /** Owner notification preferences (all-on when no settings source is wired). */
+  private async resolveSettings(connectionId: string): Promise<NotificationSettings> {
+    if (!this.settings) return DEFAULT_NOTIFICATION_SETTINGS
+    return this.settings.getSettings(connectionId)
   }
 
   /** Returns false if the update_id was already processed (duplicate). */
@@ -119,6 +134,8 @@ export class IngestService {
       const now = this.clock.now()
       const res = await this.repo.recordDeletion(input.connectionId, input.tgChatId, input.tgMessageId, now)
       if (!res.eventId || (!res.message && !this.notifyUnarchived)) return
+      const settings = await this.resolveSettings(input.connectionId)
+      if (!settings.notifyDeletions || settings.mutedChats.includes(input.tgChatId)) return
       const connection = await this.repo.getConnection(input.connectionId)
       if (!connection) return
       const peer = await this.repo.getChatPeer(input.connectionId, input.tgChatId)
@@ -129,6 +146,7 @@ export class IngestService {
         { eventId: res.eventId, message: res.message, tgMessageId: input.tgMessageId },
         peer,
         now,
+        settings.notifyMedia,
       )
       await this.repo.markDeletionNotified(input.connectionId, input.tgChatId, input.tgMessageId, this.clock.now())
     }
@@ -162,6 +180,8 @@ export class IngestService {
     // Notify only when a genuinely new version was appended over a message we
     // already had (so we have a real "before"). First-seen or duplicate → skip.
     if (prior && stored.versionCount > prior.versionCount) {
+      const settings = await this.resolveSettings(input.connectionId)
+      if (!settings.notifyEdits || settings.mutedChats.includes(input.tgChatId)) return
       const connection = await this.repo.getConnection(input.connectionId)
       if (!connection) return
       await this.notifier.notifyEdit({
@@ -201,6 +221,9 @@ export class IngestService {
     const toNotify = created.filter((c) => this.notifyUnarchived || c.message !== null)
     if (toNotify.length === 0) return
 
+    const settings = await this.resolveSettings(input.connectionId)
+    if (!settings.notifyDeletions || settings.mutedChats.includes(input.tgChatId)) return
+
     const connection = await this.repo.getConnection(input.connectionId)
     if (!connection) {
       console.error(`[notify] chat=${input.tgChatId} skipped=no_connection (user_chat_id unknown)`)
@@ -208,9 +231,11 @@ export class IngestService {
     }
     const peer = await this.repo.getChatPeer(input.connectionId, input.tgChatId)
 
-    // Group a bulk delete into ONE card; a single deletion keeps its full card.
-    if (toNotify.length === 1) {
-      await this.sendSingleDeletion(connection, input.connectionId, input.tgChatId, toNotify[0]!, peer, now)
+    // Group a bulk delete into ONE card (when enabled); otherwise send full cards.
+    if (toNotify.length === 1 || !settings.groupBatches) {
+      for (const c of toNotify) {
+        await this.sendSingleDeletion(connection, input.connectionId, input.tgChatId, c, peer, now, settings.notifyMedia)
+      }
     } else {
       await this.sendBatchDeletion(connection, input.connectionId, input.tgChatId, toNotify, peer, now)
     }
@@ -227,11 +252,12 @@ export class IngestService {
     c: RecordedDeletion,
     peer: { peerTitle: string | null; peerUsername: string | null } | null,
     at: Date,
+    attachMedia = true,
   ): Promise<void> {
     const message = c.message
     const archived = message !== null
     const media =
-      archived && this.mediaReader
+      archived && attachMedia && this.mediaReader
         ? await this.mediaReader.getStoredMediaForMessage(connectionId, tgChatId, c.tgMessageId)
         : []
     await this.notifier.notifyDeletion({

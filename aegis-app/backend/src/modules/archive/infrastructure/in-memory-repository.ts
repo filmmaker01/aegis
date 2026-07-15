@@ -15,6 +15,11 @@ import type {
   SaveMessageVersionInput,
   VersionRow,
 } from '../application/ports'
+import {
+  DEFAULT_NOTIFICATION_SETTINGS,
+  type NotificationSettings,
+  type NotificationSettingsRepository,
+} from '../application/settings-ports'
 import type {
   ChatDto,
   DeletedItemDto,
@@ -108,7 +113,7 @@ const sigOf = (text?: string | null, editDate?: Date) =>
 
 /** In-memory Archive + Query repository — for tests and local dev without Postgres. */
 export class InMemoryArchiveRepository
-  implements ArchiveRepository, QueryRepository, MediaRepository
+  implements ArchiveRepository, QueryRepository, MediaRepository, NotificationSettingsRepository
 {
   readonly processed = new Set<number>()
   readonly connections = new Map<string, ConnRecord>()
@@ -118,6 +123,7 @@ export class InMemoryArchiveRepository
   readonly deletions = new Map<string, DelRecord>()
   readonly deletionsById = new Map<string, DelRecord>()
   readonly mediaItems = new Map<string, MediaRec>()
+  readonly settings = new Map<string, NotificationSettings>()
 
   constructor(private readonly now: () => Date = () => new Date()) {}
 
@@ -455,6 +461,27 @@ export class InMemoryArchiveRepository
     const m = this.messagesById.get(messageId)
     if (!m) return []
     return this.getStoredMediaForMessage(m.connectionId, m.tgChatId, m.tgMessageId)
+  }
+
+  // ── Notification settings ────────────────────────────────────────────────────
+
+  async getSettings(connectionId: string): Promise<NotificationSettings> {
+    const s = this.settings.get(connectionId)
+    return s ? { ...s, mutedChats: [...s.mutedChats] } : { ...DEFAULT_NOTIFICATION_SETTINGS }
+  }
+
+  async updateSettings(
+    connectionId: string,
+    patch: Partial<NotificationSettings>,
+  ): Promise<NotificationSettings> {
+    const current = this.settings.get(connectionId) ?? { ...DEFAULT_NOTIFICATION_SETTINGS }
+    const next: NotificationSettings = {
+      ...current,
+      ...patch,
+      mutedChats: patch.mutedChats ? [...patch.mutedChats] : [...current.mutedChats],
+    }
+    this.settings.set(connectionId, next)
+    return { ...next, mutedChats: [...next.mutedChats] }
   }
 
   // ── Query side ──────────────────────────────────────────────────────────────
