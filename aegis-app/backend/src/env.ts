@@ -30,6 +30,8 @@ const envSchema = z.object({
   NODE_ENV: z.string().optional(),
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().min(1),
+  // Direct (non-pooled) connection for Prisma migrations behind a pooler. CLI-only.
+  DIRECT_URL: optionalStringSchema,
   JWT_SECRET: z.string().min(32),
   CORS_ORIGINS: z
     .string()
@@ -68,7 +70,32 @@ const envSchema = z.object({
   validateJwtSecret(env, ctx)
   validateCorsOrigins(env, ctx)
   validateStorageEnv(env, ctx)
+  validateAegisProductionEnv(env, ctx)
 })
+
+/**
+ * Production hard requirements for Aegis. Runs only for production-like runtimes
+ * (NODE_ENV=production or COOKIE_SECURE). Fails fast so a misconfigured prod
+ * deploy never silently loses data or serves an unauthenticated webhook.
+ */
+function validateAegisProductionEnv(env: z.infer<typeof envSchema>, ctx: z.RefinementCtx) {
+  if (!isProductionLikeRuntime(env)) return
+
+  const require = (cond: boolean, path: string, message: string) => {
+    if (!cond) ctx.addIssue({ code: 'custom', path: [path], message })
+  }
+
+  require(env.ARCHIVE_STORE !== 'memory', 'ARCHIVE_STORE', 'must not be "memory" in production (data would be lost on restart)')
+  require(Boolean(env.TELEGRAM_BOT_TOKEN), 'TELEGRAM_BOT_TOKEN', 'is required in production')
+  require(Boolean(env.TELEGRAM_WEBHOOK_SECRET), 'TELEGRAM_WEBHOOK_SECRET', 'is required in production')
+  // Containers have ephemeral disks — local media storage would lose files on redeploy.
+  require(env.MEDIA_STORAGE !== 'local', 'MEDIA_STORAGE', 'must be "s3" in production (local disk is ephemeral)')
+  require(
+    /sslmode=require|supabase\.(co|com)|\.pooler\./i.test(env.DATABASE_URL),
+    'DATABASE_URL',
+    'must use TLS in production (append ?sslmode=require, or use a Supabase/pooler host)',
+  )
+}
 
 export type AppEnv = z.infer<typeof envSchema>
 
