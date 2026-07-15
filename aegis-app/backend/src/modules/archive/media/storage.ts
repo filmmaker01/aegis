@@ -82,8 +82,11 @@ export function createMediaStorage(env: AppEnv): MediaStorage {
     }
     const s3 = new S3Client({
       endpoint: s3Config.endpoint,
-      region: 'us-east-1', // signing region; Spaces selects region from endpoint
-      forcePathStyle: false,
+      region: s3Config.region,
+      // Path-style is required by Supabase Storage's S3 endpoint (and is also
+      // accepted by AWS S3 / DO Spaces). Virtual-hosted style would resolve to a
+      // non-existent `<bucket>.<host>` and fail.
+      forcePathStyle: true,
       credentials: { accessKeyId: s3Config.accessKeyId, secretAccessKey: s3Config.secretAccessKey },
     })
     return new S3MediaStorage(s3, s3Config.bucket)
