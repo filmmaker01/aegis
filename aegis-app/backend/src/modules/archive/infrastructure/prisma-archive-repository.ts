@@ -468,16 +468,23 @@ export class PrismaArchiveRepository
   // ── Notification settings ────────────────────────────────────────────────────
 
   async getSettings(connectionId: string): Promise<NotificationSettings> {
-    const conn = await this.connRow(connectionId)
-    if (!conn) return { ...DEFAULT_NOTIFICATION_SETTINGS }
-    const s = await this.db.notificationSettings.findUnique({ where: { connectionId: conn.id } })
-    if (!s) return { ...DEFAULT_NOTIFICATION_SETTINGS }
-    return {
-      notifyDeletions: s.notifyDeletions,
-      notifyEdits: s.notifyEdits,
-      notifyMedia: s.notifyMedia,
-      groupBatches: s.groupBatches,
-      mutedChats: s.mutedChats.map(num),
+    try {
+      const conn = await this.connRow(connectionId)
+      if (!conn) return { ...DEFAULT_NOTIFICATION_SETTINGS }
+      const s = await this.db.notificationSettings.findUnique({ where: { connectionId: conn.id } })
+      if (!s) return { ...DEFAULT_NOTIFICATION_SETTINGS }
+      return {
+        notifyDeletions: s.notifyDeletions,
+        notifyEdits: s.notifyEdits,
+        notifyMedia: s.notifyMedia,
+        groupBatches: s.groupBatches,
+        mutedChats: s.mutedChats.map(num),
+      }
+    } catch (err) {
+      // Degrade to all-on (current behaviour) if the table isn't migrated yet or
+      // a transient read fails — never drop a notification over a settings read.
+      console.warn(`[settings] getSettings fell back to defaults: ${(err as Error).name}`)
+      return { ...DEFAULT_NOTIFICATION_SETTINGS }
     }
   }
 

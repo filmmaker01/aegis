@@ -164,6 +164,23 @@ describe('CallbackService — restore', () => {
     expect(answersOf(calls)).toContain('Восстановлено')
   })
 
+  test('restores stored voice media (non-photo type)', async () => {
+    await repo.saveMessageVersion(
+      save(1, null, { hasMedia: true, media: [{ type: 'voice', tgFileId: 'v1' }] }),
+    )
+    const [job] = await repo.listPendingMedia(10, 3)
+    await repo.claimMediaDownload(job!.mediaId)
+    await repo.markMediaStored(job!.mediaId, { storageKey: 'k/v', checksum: 'c', mimeType: 'audio/ogg' })
+    const { eventId } = await repo.recordDeletion(CONN, CHAT, 1, new Date())
+
+    const { client, calls } = fakeClient()
+    const svc = new CallbackService(repo, client, new FakeStorage(true))
+    await svc.handle(cb(`restore:${eventId}`))
+
+    expect(calls.some((c) => c.method === 'sendMedia' && c.type === 'voice')).toBe(true)
+    expect(answersOf(calls)).toContain('Восстановлено')
+  })
+
   test('restore of an edited message re-sends the previous version', async () => {
     const stored = await repo.saveMessageVersion(save(1, 'v1'))
     await repo.saveMessageVersion(save(1, 'v2', { editDate: new Date('2026-07-14T10:05:00Z') }))
@@ -194,6 +211,33 @@ describe('CallbackService — history', () => {
     expect(msgs[0]?.text).toContain('История сообщения')
     // answered (spinner stopped)
     expect(calls.some((c) => c.method === 'answer')).toBe(true)
+  })
+
+  test('history paginates: page 1 vs page 2 show different versions', async () => {
+    const stored = await repo.saveMessageVersion(save(1, 'v1'))
+    for (let v = 2; v <= 7; v++) {
+      await repo.saveMessageVersion(save(1, `v${v}`, { editDate: new Date(`2026-07-14T10:0${v}:00Z`) }))
+    }
+    const { eventId } = await repo.recordDeletion(CONN, CHAT, 1, new Date())
+    const { client, calls } = fakeClient()
+    const svc = new CallbackService(repo, client, new FakeStorage())
+
+    // page 1 via the event id
+    await svc.handle(cb(`history:${eventId}`))
+    const page1 = calls.find((c) => c.method === 'sendMessage')?.text ?? ''
+    expect(page1).toContain('стр. 1/2')
+    expect(page1).toContain('Версия 1')
+    expect(page1).not.toContain('Версия 6')
+
+    // page 2 via the pagination callback
+    const { client: client2, calls: calls2 } = fakeClient()
+    const svc2 = new CallbackService(repo, client2, new FakeStorage())
+    void stored
+    await svc2.handle(cb(`history:${eventId}:2`))
+    const page2 = calls2.find((c) => c.method === 'sendMessage')?.text ?? ''
+    expect(page2).toContain('стр. 2/2')
+    expect(page2).toContain('Версия 6')
+    expect(page2).toContain('Версия 7')
   })
 
   test('history for a foreign user -> "Недоступно", no history sent', async () => {

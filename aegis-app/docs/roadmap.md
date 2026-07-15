@@ -49,6 +49,15 @@ Done (continued):
 - ✅ **Deployment guide**: `aegis-deployment.md` (Supabase project/bucket/keys, Railway/Fly,
   Vercel Mini App, backups/PITR, rollback, security).
 
+Done (continued):
+- ✅ **Owner notification UX in the bot chat** (the primary surface): Russian HTML cards with inline
+  buttons (Restore / History / Open archive), edit notifications (before/after), bulk deletes grouped
+  into one batch card, and a security-critical callback service (owner-only, anti-enumeration, safe
+  repeat-Restore). Per-connection settings (notifyDeletions/Edits/Media, groupBatches, mutedChats),
+  all-on by default. See `notification-ux.md`. ⚠️ The `notification_settings` Prisma **migration is
+  pending** — `migrate dev` is blocked by the RLS migration's `_prisma_migrations` line failing in the
+  shadow DB; generate it once that's fixed.
+
 ## Phase 3 — Production deploy (in progress)
 Prepared and awaiting the user's web-UI actions (create Supabase project/bucket/keys, deploy
 backend host + Mini App). Then: re-register webhook to the permanent URL and run the production
@@ -57,7 +66,9 @@ live e2e (text/photo/voice + persistence across restart).
 Remaining:
 - ⏳ Execute the deploy (user creates Supabase + host; I re-register webhook + run e2e).
 - ⏳ Media retention/GC (delete bucket object with the row); background sweeper for pending media.
-- ⏳ Notification polish (quiet hours, batching, mute per chat); optional edit notifications.
+- ✅ Notification polish: batching, mute per chat, edit notifications (done — see `notification-ux.md`).
+- ⏳ Generate + apply the `notification_settings` migration (blocked on the RLS/shadow-DB defect).
+- ⏳ Notification polish (remaining): quiet hours; Mini App settings UI; in-place history edit.
 
 ## Phase 3 — Beta
 - Edited history, Chats/Settings/Subscription screens, billing, retention, legal review.
