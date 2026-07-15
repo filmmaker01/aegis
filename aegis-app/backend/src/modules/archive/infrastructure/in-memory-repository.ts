@@ -8,7 +8,13 @@ import type {
 } from '../domain/types'
 import { randomUUID } from 'node:crypto'
 
-import type { ArchiveRepository, SaveMessageVersionInput } from '../application/ports'
+import type {
+  ArchiveRepository,
+  CallbackEventRef,
+  CallbackMessageRef,
+  SaveMessageVersionInput,
+  VersionRow,
+} from '../application/ports'
 import type {
   ChatDto,
   DeletedItemDto,
@@ -53,6 +59,7 @@ interface VersionRecord {
 }
 
 interface MsgRecord {
+  id: string
   connectionId: string
   tgChatId: number
   tgMessageId: number
@@ -86,6 +93,7 @@ interface MediaRec {
 }
 
 interface DelRecord {
+  id: string
   connectionId: string
   tgChatId: number
   tgMessageId: number
@@ -106,7 +114,9 @@ export class InMemoryArchiveRepository
   readonly connections = new Map<string, ConnRecord>()
   readonly chats = new Map<string, ChatRecord>()
   readonly messages = new Map<string, MsgRecord>()
+  readonly messagesById = new Map<string, MsgRecord>()
   readonly deletions = new Map<string, DelRecord>()
+  readonly deletionsById = new Map<string, DelRecord>()
   readonly mediaItems = new Map<string, MediaRec>()
 
   constructor(private readonly now: () => Date = () => new Date()) {}
@@ -191,6 +201,7 @@ export class InMemoryArchiveRepository
 
     if (!existing) {
       const rec: MsgRecord = {
+        id: randomUUID(),
         connectionId: input.connectionId,
         tgChatId: input.tgChatId,
         tgMessageId: input.tgMessageId,
@@ -205,6 +216,7 @@ export class InMemoryArchiveRepository
         versions: [{ versionNo: 1, text: input.text ?? null, editDate: input.editDate, sig }],
       }
       this.messages.set(k, rec)
+      this.messagesById.set(rec.id, rec)
       this.mergeMedia(rec, input.media)
       return toStored(rec)
     }
@@ -355,15 +367,23 @@ export class InMemoryArchiveRepository
     tgChatId: number,
     tgMessageId: number,
     detectedAt: Date,
-  ): Promise<{ created: boolean; message: StoredMessage | null }> {
+  ): Promise<{ created: boolean; message: StoredMessage | null; eventId: string | null }> {
     const k = key(connectionId, tgChatId, tgMessageId)
     const message = this.messages.get(k)
-    if (this.deletions.has(k)) {
-      return { created: false, message: message ? toStored(message) : null }
+    const existingDel = this.deletions.get(k)
+    if (existingDel) {
+      if (message) message.isDeleted = true
+      return {
+        created: false,
+        message: message ? toStored(message) : null,
+        eventId: existingDel.id,
+      }
     }
-    this.deletions.set(k, { connectionId, tgChatId, tgMessageId, detectedAt })
+    const rec: DelRecord = { id: randomUUID(), connectionId, tgChatId, tgMessageId, detectedAt }
+    this.deletions.set(k, rec)
+    this.deletionsById.set(rec.id, rec)
     if (message) message.isDeleted = true
-    return { created: true, message: message ? toStored(message) : null }
+    return { created: true, message: message ? toStored(message) : null, eventId: rec.id }
   }
 
   async markDeletionNotified(
@@ -374,6 +394,67 @@ export class InMemoryArchiveRepository
   ): Promise<void> {
     const d = this.deletions.get(key(connectionId, tgChatId, tgMessageId))
     if (d) d.notifiedAt = at
+  }
+
+  async getChatPeer(
+    connectionId: string,
+    tgChatId: number,
+  ): Promise<{ peerTitle: string | null; peerUsername: string | null } | null> {
+    const chat = this.chats.get(chatKey(connectionId, tgChatId))
+    if (!chat) return null
+    return { peerTitle: chat.peerTitle ?? null, peerUsername: chat.peerUsername ?? null }
+  }
+
+  async getEventForCallback(eventId: string): Promise<CallbackEventRef | null> {
+    const d = this.deletionsById.get(eventId)
+    if (!d) return null
+    const conn = [...this.connections.values()].find((c) => c.connectionId === d.connectionId)
+    if (!conn) return null
+    const msg = this.messages.get(key(d.connectionId, d.tgChatId, d.tgMessageId))
+    return {
+      eventId: d.id,
+      ownerTgUserId: conn.ownerTgUserId,
+      connectionId: d.connectionId,
+      tgChatId: d.tgChatId,
+      tgMessageId: d.tgMessageId,
+      messageId: msg?.id ?? null,
+    }
+  }
+
+  async getMessageForCallback(messageId: string): Promise<CallbackMessageRef | null> {
+    const m = this.messagesById.get(messageId)
+    if (!m) return null
+    const conn = [...this.connections.values()].find((c) => c.connectionId === m.connectionId)
+    if (!conn) return null
+    return {
+      messageId: m.id,
+      ownerTgUserId: conn.ownerTgUserId,
+      connectionId: m.connectionId,
+      tgChatId: m.tgChatId,
+      tgMessageId: m.tgMessageId,
+      currentText: m.currentText ?? null,
+      hasMedia: m.hasMedia,
+    }
+  }
+
+  async getMessageVersions(messageId: string, offset: number, limit: number): Promise<VersionRow[]> {
+    const m = this.messagesById.get(messageId)
+    if (!m) return []
+    return m.versions.slice(offset, offset + limit).map((v) => ({
+      versionNo: v.versionNo,
+      text: v.text ?? null,
+      at: v.editDate ?? (v.versionNo === 1 ? m.sentAt : null),
+    }))
+  }
+
+  async countMessageVersions(messageId: string): Promise<number> {
+    return this.messagesById.get(messageId)?.versions.length ?? 0
+  }
+
+  async getStoredMediaForMessageId(messageId: string): Promise<StoredMediaRef[]> {
+    const m = this.messagesById.get(messageId)
+    if (!m) return []
+    return this.getStoredMediaForMessage(m.connectionId, m.tgChatId, m.tgMessageId)
   }
 
   // ── Query side ──────────────────────────────────────────────────────────────
@@ -485,6 +566,7 @@ export class InMemoryArchiveRepository
 
 function toStored(m: MsgRecord): StoredMessage {
   return {
+    id: m.id,
     connectionId: m.connectionId,
     tgChatId: m.tgChatId,
     tgMessageId: m.tgMessageId,

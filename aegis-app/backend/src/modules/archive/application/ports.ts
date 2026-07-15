@@ -71,15 +71,17 @@ export interface ArchiveRepository {
   hasDeletion(connectionId: string, tgChatId: number, tgMessageId: number): Promise<boolean>
 
   /**
-   * Idempotently record a deletion event. Returns whether it was newly created
-   * and whether an archived message existed for it.
+   * Idempotently record a deletion event. Returns whether it was newly created,
+   * whether an archived message existed for it, and the deletion event id (used
+   * to reference the event from callback buttons). eventId is null only when the
+   * connection is unknown and nothing could be recorded.
    */
   recordDeletion(
     connectionId: string,
     tgChatId: number,
     tgMessageId: number,
     detectedAt: Date,
-  ): Promise<{ created: boolean; message: StoredMessage | null }>
+  ): Promise<{ created: boolean; message: StoredMessage | null; eventId: string | null }>
 
   markDeletionNotified(
     connectionId: string,
@@ -87,6 +89,64 @@ export interface ArchiveRepository {
     tgMessageId: number,
     at: Date,
   ): Promise<void>
+
+  /** Peer labels for a chat (title / @username), used to render notification cards. */
+  getChatPeer(
+    connectionId: string,
+    tgChatId: number,
+  ): Promise<{ peerTitle: string | null; peerUsername: string | null } | null>
+
+  // ── Callback-flow reads (ownership + restore/history) ──────────────────────
+  //
+  // These resolve an opaque id from a callback_data payload back to its owner so
+  // the callback service can enforce that callback_query.from.id is the owner
+  // before doing anything. Unknown/invalid ids resolve to null (anti-enumeration:
+  // the caller answers with a neutral "unavailable" and never reveals existence).
+
+  /** Resolve a deletion event id -> owner + natural keys + archived message id. */
+  getEventForCallback(eventId: string): Promise<CallbackEventRef | null>
+
+  /** Resolve an internal message id -> owner + natural keys + current content. */
+  getMessageForCallback(messageId: string): Promise<CallbackMessageRef | null>
+
+  /** A page of stored versions (ascending by versionNo) for the history view. */
+  getMessageVersions(messageId: string, offset: number, limit: number): Promise<VersionRow[]>
+
+  /** Total stored versions for a message (for history pagination). */
+  countMessageVersions(messageId: string): Promise<number>
+
+  /** Stored media for a message by its internal id (used when re-sending on restore). */
+  getStoredMediaForMessageId(messageId: string): Promise<StoredMediaRef[]>
+}
+
+/** Owner + natural keys resolved from a deletion event id. */
+export interface CallbackEventRef {
+  eventId: string
+  ownerTgUserId: number
+  connectionId: string
+  tgChatId: number
+  tgMessageId: number
+  /** Internal id of the archived message, or null for an unarchived deletion. */
+  messageId: string | null
+}
+
+/** Owner + natural keys + current content resolved from an internal message id. */
+export interface CallbackMessageRef {
+  messageId: string
+  ownerTgUserId: number
+  connectionId: string
+  tgChatId: number
+  tgMessageId: number
+  currentText: string | null
+  hasMedia: boolean
+}
+
+/** One stored version, for the history view. */
+export interface VersionRow {
+  versionNo: number
+  text: string | null
+  /** Original send time for v1, edit time for later versions (best-effort). */
+  at: Date | null
 }
 
 export interface DeletionNotification {

@@ -64,6 +64,8 @@ export interface IncomingDeletion {
 
 /** A message as currently stored (returned by the repository). */
 export interface StoredMessage {
+  /** Internal storage id (uuid) — used to reference the message from callbacks. */
+  id: string
   connectionId: string
   tgChatId: number
   tgMessageId: number

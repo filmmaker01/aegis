@@ -6,7 +6,13 @@ import type {
   StoredConnection,
   StoredMessage,
 } from '../domain/types'
-import type { ArchiveRepository, SaveMessageVersionInput } from '../application/ports'
+import type {
+  ArchiveRepository,
+  CallbackEventRef,
+  CallbackMessageRef,
+  SaveMessageVersionInput,
+  VersionRow,
+} from '../application/ports'
 import type {
   ChatDto,
   DeletedItemDto,
@@ -142,6 +148,7 @@ export class PrismaArchiveRepository
     })
     if (!m) return null
     return {
+      id: m.id,
       connectionId,
       tgChatId,
       tgMessageId,
@@ -197,7 +204,7 @@ export class PrismaArchiveRepository
           data: { messageId: created.id, versionNo: 1, text: input.text ?? null, editDate: input.editDate ?? null, raw: input.raw as object },
         })
         await this.insertMedia(tx, created.id, input.media)
-        return this.toStored(input, 1, false)
+        return this.toStored(created.id, input, 1, false)
       }
 
       const last = existing.versions[0]
@@ -206,7 +213,7 @@ export class PrismaArchiveRepository
         await this.insertMedia(tx, existing.id, input.media)
         if (input.hasMedia && !existing.hasMedia)
           await tx.archivedMessage.update({ where: { id: existing.id }, data: { hasMedia: true } })
-        return this.toStored(input, existing._count.versions, existing.isDeleted)
+        return this.toStored(existing.id, input, existing._count.versions, existing.isDeleted)
       }
 
       await tx.messageVersion.create({
@@ -217,12 +224,18 @@ export class PrismaArchiveRepository
         data: { currentText: input.text ?? null, isEdited: true, hasMedia: existing.hasMedia || input.hasMedia },
       })
       await this.insertMedia(tx, existing.id, input.media)
-      return this.toStored(input, existing._count.versions + 1, existing.isDeleted)
+      return this.toStored(existing.id, input, existing._count.versions + 1, existing.isDeleted)
     })
   }
 
-  private toStored(input: SaveMessageVersionInput, versionCount: number, isDeleted: boolean): StoredMessage {
+  private toStored(
+    id: string,
+    input: SaveMessageVersionInput,
+    versionCount: number,
+    isDeleted: boolean,
+  ): StoredMessage {
     return {
+      id,
       connectionId: input.connectionId,
       tgChatId: input.tgChatId,
       tgMessageId: input.tgMessageId,
@@ -289,9 +302,9 @@ export class PrismaArchiveRepository
     tgChatId: number,
     tgMessageId: number,
     detectedAt: Date,
-  ): Promise<{ created: boolean; message: StoredMessage | null }> {
+  ): Promise<{ created: boolean; message: StoredMessage | null; eventId: string | null }> {
     const conn = await this.connRow(connectionId)
-    if (!conn) return { created: false, message: null }
+    if (!conn) return { created: false, message: null, eventId: null }
     // Ensure chat row exists (a deletion can precede any message for pre-connection history).
     const chat = await this.db.chat.upsert({
       where: { connectionId_tgChatId: { connectionId: conn.id, tgChatId: big(tgChatId) } },
@@ -303,8 +316,9 @@ export class PrismaArchiveRepository
       select: { id: true },
     })
     const message = await this.findMessage(connectionId, tgChatId, tgMessageId)
+    let eventId: string
     try {
-      await this.db.deletedEvent.create({
+      const created = await this.db.deletedEvent.create({
         data: {
           connectionId: conn.id,
           chatId: chat.id,
@@ -312,13 +326,21 @@ export class PrismaArchiveRepository
           detectedAt,
           messageId: msgRow?.id ?? null,
         },
+        select: { id: true },
       })
+      eventId = created.id
     } catch (err) {
-      if (isUniqueViolation(err)) return { created: false, message }
+      if (isUniqueViolation(err)) {
+        const existing = await this.db.deletedEvent.findUnique({
+          where: { connectionId_chatId_tgMessageId: { connectionId: conn.id, chatId: chat.id, tgMessageId } },
+          select: { id: true },
+        })
+        return { created: false, message, eventId: existing?.id ?? null }
+      }
       throw err
     }
     if (message) await this.markMessageDeleted(connectionId, tgChatId, tgMessageId)
-    return { created: true, message }
+    return { created: true, message, eventId }
   }
 
   async markDeletionNotified(connectionId: string, tgChatId: number, tgMessageId: number, at: Date): Promise<void> {
@@ -332,6 +354,110 @@ export class PrismaArchiveRepository
       where: { connectionId: conn.id, chatId: chat.id, tgMessageId },
       data: { notifiedAt: at },
     })
+  }
+
+  async getChatPeer(
+    connectionId: string,
+    tgChatId: number,
+  ): Promise<{ peerTitle: string | null; peerUsername: string | null } | null> {
+    const conn = await this.connRow(connectionId)
+    if (!conn) return null
+    const chat = await this.db.chat.findUnique({
+      where: { connectionId_tgChatId: { connectionId: conn.id, tgChatId: big(tgChatId) } },
+      select: { peerTitle: true, peerUsername: true },
+    })
+    if (!chat) return null
+    return { peerTitle: chat.peerTitle ?? null, peerUsername: chat.peerUsername ?? null }
+  }
+
+  async getEventForCallback(eventId: string): Promise<CallbackEventRef | null> {
+    try {
+      const e = await this.db.deletedEvent.findUnique({
+        where: { id: eventId },
+        include: { connection: true, chat: true },
+      })
+      if (!e) return null
+      return {
+        eventId: e.id,
+        ownerTgUserId: num(e.connection.ownerTgUserId),
+        connectionId: e.connection.connectionId,
+        tgChatId: num(e.chat.tgChatId),
+        tgMessageId: e.tgMessageId,
+        messageId: e.messageId,
+      }
+    } catch {
+      // Malformed id (e.g. not a uuid) -> treat as unknown (anti-enumeration).
+      return null
+    }
+  }
+
+  async getMessageForCallback(messageId: string): Promise<CallbackMessageRef | null> {
+    try {
+      const m = await this.db.archivedMessage.findUnique({
+        where: { id: messageId },
+        include: { connection: true, chat: true },
+      })
+      if (!m) return null
+      return {
+        messageId: m.id,
+        ownerTgUserId: num(m.connection.ownerTgUserId),
+        connectionId: m.connection.connectionId,
+        tgChatId: num(m.chat.tgChatId),
+        tgMessageId: m.tgMessageId,
+        currentText: m.currentText,
+        hasMedia: m.hasMedia,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  async getMessageVersions(messageId: string, offset: number, limit: number): Promise<VersionRow[]> {
+    try {
+      const m = await this.db.archivedMessage.findUnique({
+        where: { id: messageId },
+        select: { sentAt: true },
+      })
+      if (!m) return []
+      const vs = await this.db.messageVersion.findMany({
+        where: { messageId },
+        orderBy: { versionNo: 'asc' },
+        skip: offset,
+        take: limit,
+      })
+      return vs.map((v) => ({
+        versionNo: v.versionNo,
+        text: v.text,
+        at: v.editDate ?? (v.versionNo === 1 ? m.sentAt : v.capturedAt),
+      }))
+    } catch {
+      return []
+    }
+  }
+
+  async countMessageVersions(messageId: string): Promise<number> {
+    try {
+      return await this.db.messageVersion.count({ where: { messageId } })
+    } catch {
+      return 0
+    }
+  }
+
+  async getStoredMediaForMessageId(messageId: string): Promise<StoredMediaRef[]> {
+    try {
+      const media = await this.db.media.findMany({ where: { messageId, state: 'stored' } })
+      return media
+        .filter((m) => m.storageKey)
+        .map((m) => ({
+          mediaId: m.id,
+          type: m.type as MediaType,
+          storageKey: m.storageKey as string,
+          fileName: m.fileName,
+          mimeType: m.mimeType,
+        }))
+    } catch {
+      return []
+    }
   }
 
   // ── Query side ──────────────────────────────────────────────────────────────
