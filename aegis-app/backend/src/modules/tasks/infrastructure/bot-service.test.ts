@@ -177,39 +177,37 @@ describe('create flow', () => {
     expect(tasks[0]!.remindAt).toBeNull()
   })
 
-  test('custom date: a valid input advances to confirmation', async () => {
+  test('a natural-language phrase at the when step advances to confirmation', async () => {
     const { bot, repo, lastEdit } = setup()
     await onboarded(repo)
 
     await bot.onMessage(message('/new'))
     await bot.onMessage(message('Забрать посылку'))
-    await bot.onCallback(callback('slot:custom'))
-    expect(lastEdit().text).toContain('Другая дата')
+    expect(lastEdit().text).toContain('Когда напомнить')
 
-    await bot.onMessage(message('25.12 14:30'))
-    expect(lastEdit().text).toContain('25 дек, 14:30')
+    await bot.onMessage(message('завтра в 18'))
+    expect(lastEdit().text).toContain('завтра, 18:00')
 
     await bot.onCallback(callback('confirm'))
     const tasks = await repo.listTasks(USER, 10)
-    expect(tasks[0]!.remindAt!.toISOString()).toBe('2026-12-25T11:30:00.000Z')
+    // 18:00 MSK on 2026-07-18 == 15:00 UTC
+    expect(tasks[0]!.remindAt!.toISOString()).toBe('2026-07-18T15:00:00.000Z')
   })
 
-  test('custom date: junk re-prompts and keeps the step open', async () => {
+  test('an unparseable phrase re-prompts and keeps the when buttons', async () => {
     const { bot, repo, lastEdit } = setup()
     await onboarded(repo)
 
     await bot.onMessage(message('/new'))
     await bot.onMessage(message('Задача'))
-    await bot.onCallback(callback('slot:custom'))
     await bot.onMessage(message('когда-нибудь потом'))
 
     expect(lastEdit().text).toContain('Не получилось разобрать')
-    expect((await repo.getDraft(USER))!.step).toBe('awaiting_custom_date')
-    // The way out must survive a typo — without this the user is trapped in the
-    // step with no button to press.
-    expect(lastEdit().keyboard).toContain('cancel')
+    expect((await repo.getDraft(USER))!.step).toBe('awaiting_time')
+    // The preset/calendar buttons stay, so the user is never stuck.
+    expect(lastEdit().keyboard).toContain('cal')
 
-    // The user can simply type again.
+    // Typing a valid phrase then works.
     await bot.onMessage(message('18:45'))
     expect(lastEdit().text).toContain('сегодня, 18:45')
   })
@@ -258,12 +256,13 @@ describe('create flow', () => {
     expect(await repo.listTasks(USER, 10)).toHaveLength(0)
   })
 
-  test('typing during the button-only step nudges instead of creating', async () => {
+  test('typing at the confirm step nudges instead of creating', async () => {
     const { bot, repo, lastSent } = setup()
     await onboarded(repo)
     await bot.onMessage(message('/new'))
     await bot.onMessage(message('Задача'))
-    await bot.onMessage(message('вечером пожалуйста'))
+    await bot.onCallback(callback('slot:1h')) // -> confirm step (button-only)
+    await bot.onMessage(message('ещё текст'))
     expect(lastSent().text).toContain('кнопкой')
   })
 })
@@ -299,7 +298,7 @@ describe('task list and detail', () => {
     expect(lastEdit().text).toContain('сегодня, 19:00')
     expect(lastEdit().keyboard).toEqual([
       `done:${task.id}`,
-      `snooze:${task.id}`,
+      `edittime:${task.id}`,
       `edit:${task.id}`,
       `del:${task.id}`,
       'list',
@@ -455,34 +454,32 @@ describe('task actions', () => {
     expect(updated!.reminderSentAt).toBeNull()
   })
 
-  test('⏰ Перенести offers the snooze options', async () => {
+  test('⏰ Изменить время opens the when picker for the task', async () => {
     const { bot, repo, lastEdit } = setup()
     await onboarded(repo)
     const task = await repo.createTask({ telegramUserId: USER, title: 'Задача', remindAt: null })
 
-    await bot.onCallback(callback(`snooze:${task.id}`))
+    await bot.onCallback(callback(`edittime:${task.id}`))
 
-    expect(lastEdit().keyboard).toEqual([
-      `snz:${task.id}:15m`,
-      `snz:${task.id}:1h`,
-      `snz:${task.id}:custom`,
-      `open:${task.id}`,
-    ])
+    expect(lastEdit().text).toContain('Изменить время')
+    expect(lastEdit().keyboard).toContain('cal')
+    expect((await repo.getDraft(USER))!.taskId).toBe(task.id)
   })
 
-  test('snooze to a custom date applies immediately', async () => {
+  test('editing time via a phrase reschedules immediately', async () => {
     const { bot, repo, lastEdit } = setup()
     await onboarded(repo)
     const task = await repo.createTask({ telegramUserId: USER, title: 'Задача', remindAt: null })
 
-    await bot.onCallback(callback(`snz:${task.id}:custom`))
+    await bot.onCallback(callback(`edittime:${task.id}`))
     await bot.onMessage(message('20:00'))
 
     const updated = await repo.getTaskForUser(task.id, USER)
-    // 20:00 MSK == 17:00 UTC
+    // 20:00 MSK == 17:00 UTC, same day
     expect(updated!.remindAt!.toISOString()).toBe('2026-07-17T17:00:00.000Z')
     expect(await repo.getDraft(USER)).toBeNull()
-    expect(lastEdit().text).toContain('сегодня, 20:00')
+    // Back to the task detail card.
+    expect(lastEdit().text).toContain('Задача')
   })
 
   test('✏️ Изменить renames the task', async () => {
@@ -684,5 +681,142 @@ describe('resilience', () => {
       await bot.onCallback(callback(data))
       expect(answers.at(-1)!.text).toBe('Недоступно')
     }
+  })
+})
+
+describe('one-message natural-language create', () => {
+  test('"title + phrase" in one message goes straight to confirmation', async () => {
+    const { bot, repo, lastEdit } = setup()
+    await onboarded(repo)
+    await bot.onMessage(message('/new'))
+    await bot.onMessage(message('Купить хлеб завтра в 18'))
+
+    // Skipped the "when?" step — already at confirm with the split time.
+    expect(lastEdit().text).toContain('Купить хлеб')
+    expect(lastEdit().text).toContain('завтра, 18:00')
+    expect(lastEdit().keyboard).toEqual(['confirm', 'cancel'])
+
+    await bot.onCallback(callback('confirm'))
+    const tasks = await repo.listTasks(USER, 10)
+    expect(tasks[0]!.title).toBe('Купить хлеб')
+    expect(tasks[0]!.remindAt!.toISOString()).toBe('2026-07-18T15:00:00.000Z')
+  })
+
+  test('a message with no time phrase becomes the title and asks when', async () => {
+    const { bot, repo, lastEdit } = setup()
+    await onboarded(repo)
+    await bot.onMessage(message('/new'))
+    await bot.onMessage(message('Помыть машину'))
+
+    expect(lastEdit().text).toContain('Помыть машину')
+    expect(lastEdit().text).toContain('Когда напомнить')
+    expect((await repo.getDraft(USER))!.step).toBe('awaiting_time')
+  })
+})
+
+describe('calendar picker', () => {
+  test('cal -> day -> hour -> minute -> confirm creates the task', async () => {
+    const { bot, repo, lastEdit } = setup() // now = 2026-07-17 12:00 MSK
+    await onboarded(repo)
+    await bot.onMessage(message('/new'))
+    await bot.onMessage(message('Встреча'))
+
+    await bot.onCallback(callback('cal'))
+    expect(lastEdit().text).toContain('Выберите дату')
+    // navigate to August
+    await bot.onCallback(callback('calnav:2026:8'))
+    expect(lastEdit().keyboard).toContain('calday:2026:8:15')
+
+    await bot.onCallback(callback('calday:2026:8:15'))
+    expect(lastEdit().text).toContain('15 августа 2026')
+
+    await bot.onCallback(callback('calh:2026:8:15:14'))
+    expect(lastEdit().text).toContain('14:__')
+
+    await bot.onCallback(callback('calm:2026:8:15:14:30'))
+    expect(lastEdit().text).toContain('15 авг')
+    expect(lastEdit().keyboard).toEqual(['confirm', 'cancel'])
+
+    await bot.onCallback(callback('confirm'))
+    const tasks = await repo.listTasks(USER, 10)
+    // 14:30 MSK on 2026-08-15 == 11:30 UTC
+    expect(tasks[0]!.remindAt!.toISOString()).toBe('2026-08-15T11:30:00.000Z')
+  })
+
+  test('a past minute is refused, not scheduled', async () => {
+    const { bot, repo, answers } = setup() // now = 12:00 MSK
+    await onboarded(repo)
+    await bot.onMessage(message('/new'))
+    await bot.onMessage(message('Задача'))
+    await bot.onCallback(callback('cal'))
+    // today, 08:00 has passed
+    await bot.onCallback(callback('calm:2026:7:17:8:0'))
+    expect(answers.at(-1)!.text).toContain('прошло')
+    expect(await repo.listTasks(USER, 10)).toHaveLength(0)
+  })
+
+  test('manual time entry after a date pick', async () => {
+    const { bot, repo, lastEdit } = setup()
+    await onboarded(repo)
+    await bot.onMessage(message('/new'))
+    await bot.onMessage(message('Задача'))
+    await bot.onCallback(callback('cal'))
+    await bot.onCallback(callback('calman:2026:8:20'))
+    expect(lastEdit().text).toContain('Введите время')
+
+    await bot.onMessage(message('9:05'))
+    await bot.onCallback(callback('confirm'))
+    const tasks = await repo.listTasks(USER, 10)
+    // 09:05 MSK on 2026-08-20 == 06:05 UTC
+    expect(tasks[0]!.remindAt!.toISOString()).toBe('2026-08-20T06:05:00.000Z')
+  })
+
+  test('the calendar back button returns to the when step', async () => {
+    const { bot, repo, lastEdit } = setup()
+    await onboarded(repo)
+    await bot.onMessage(message('/new'))
+    await bot.onMessage(message('Задача'))
+    await bot.onCallback(callback('cal'))
+    await bot.onCallback(callback('when'))
+    expect(lastEdit().text).toContain('Когда напомнить')
+    expect((await repo.getDraft(USER))!.step).toBe('awaiting_time')
+  })
+
+  test('noop (calendar padding) is answered silently and changes nothing', async () => {
+    const { bot, repo, answers, edits } = setup()
+    await onboarded(repo)
+    await bot.onMessage(message('/new'))
+    await bot.onMessage(message('Задача'))
+    await bot.onCallback(callback('cal'))
+    const before = edits.length
+    await bot.onCallback(callback('noop'))
+    expect(answers.at(-1)!.text).toBeUndefined()
+    expect(edits.length).toBe(before)
+  })
+
+  test('editing an existing task via the calendar reschedules it', async () => {
+    const { bot, repo } = setup()
+    await onboarded(repo)
+    const task = await repo.createTask({ telegramUserId: USER, title: 'Задача', remindAt: null })
+
+    await bot.onCallback(callback(`edittime:${task.id}`))
+    await bot.onCallback(callback('cal'))
+    await bot.onCallback(callback('calday:2026:8:15'))
+    await bot.onCallback(callback('calh:2026:8:15:10'))
+    await bot.onCallback(callback('calm:2026:8:15:10:0'))
+
+    const updated = await repo.getTaskForUser(task.id, USER)
+    expect(updated!.remindAt!.toISOString()).toBe('2026-08-15T07:00:00.000Z')
+    expect(await repo.getDraft(USER)).toBeNull() // edit applies immediately
+  })
+
+  test('a forged calendar coordinate is denied, not scheduled', async () => {
+    const { bot, repo, answers } = setup()
+    await onboarded(repo)
+    await bot.onMessage(message('/new'))
+    await bot.onMessage(message('Задача'))
+    await bot.onCallback(callback('calday:2026:13:40')) // month 13, day 40
+    expect(answers.at(-1)!.text).toBe('Недоступно')
+    expect(await repo.listTasks(USER, 10)).toHaveLength(0)
   })
 })
