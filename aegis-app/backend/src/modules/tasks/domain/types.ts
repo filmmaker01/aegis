@@ -35,9 +35,11 @@ export type DeliveryOutcome =
 /** Steps of the create/edit wizard. One draft per user at a time. */
 export type DraftStep =
   | 'awaiting_title'
+  /** The "when?" step: presets, calendar, or a typed natural-language phrase. */
   | 'awaiting_time'
   | 'awaiting_confirm'
-  | 'awaiting_custom_date'
+  /** Typed HH:MM for a date already chosen in the calendar. */
+  | 'awaiting_manual_time'
   | 'awaiting_edit_title'
 
 /** The reminder presets offered when creating a task. */

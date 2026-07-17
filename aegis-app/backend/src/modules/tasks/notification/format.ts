@@ -10,7 +10,13 @@
  * Style rules (product): Russian, clean, compact, minimal emoji.
  */
 
-import { toWallClock, zoneOffsetMs } from '../domain/schedule'
+import {
+  isBeforeToday,
+  MONTHS_NOMINATIVE,
+  monthMatrix,
+  toWallClock,
+  zoneOffsetMs,
+} from '../domain/schedule'
 import type { Task } from '../domain/types'
 
 // Telegram hard limits.
@@ -127,8 +133,17 @@ export function mainMenuKeyboard(): InlineKeyboard {
   }
 }
 
-/** The time picker shown after the title is entered. */
-export function slotKeyboard(): InlineKeyboard {
+/** A button that does nothing (calendar padding / labels). Answered silently. */
+const NOOP = encodeCallback('noop')
+/** Invisible label for empty calendar cells (Telegram needs non-empty text). */
+const BLANK = '⁣'
+
+/**
+ * The "when?" step after a title: quick presets, a calendar entry, and — because
+ * the card also accepts a typed phrase — an implicit natural-language option.
+ * Used for both creating and editing a reminder time.
+ */
+export function whenKeyboard(): InlineKeyboard {
   return {
     inline_keyboard: [
       [
@@ -139,11 +154,111 @@ export function slotKeyboard(): InlineKeyboard {
         { text: 'Сегодня вечером', callback_data: encodeCallback('slot', 'evening') },
         { text: 'Завтра утром', callback_data: encodeCallback('slot', 'morning') },
       ],
-      [{ text: '📅 Другая дата', callback_data: encodeCallback('slot', 'custom') }],
+      [{ text: '📅 Выбрать дату и время', callback_data: encodeCallback('cal') }],
       [{ text: 'Без напоминания', callback_data: encodeCallback('slot', 'none') }],
       [{ text: '✕ Отмена', callback_data: encodeCallback('cancel') }],
     ],
   }
+}
+
+const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
+
+/**
+ * Month grid, Monday-first. Days before the owner's today are shown but not
+ * pickable (there is no point scheduling a reminder in the past). Navigation
+ * arrows change the month; a day tap advances to the hour picker.
+ */
+export function calendarKeyboard(year: number, month: number, now: Date, timeZone: string): InlineKeyboard {
+  const prev = month === 1 ? { y: year - 1, m: 12 } : { y: year, m: month - 1 }
+  const next = month === 12 ? { y: year + 1, m: 1 } : { y: year, m: month + 1 }
+
+  const rows: InlineButton[][] = [
+    [
+      { text: '‹', callback_data: encodeCallback('calnav', prev.y, prev.m) },
+      { text: `${MONTHS_NOMINATIVE[month - 1]} ${year}`, callback_data: NOOP },
+      { text: '›', callback_data: encodeCallback('calnav', next.y, next.m) },
+    ],
+    WEEKDAYS.map((w) => ({ text: w, callback_data: NOOP })),
+  ]
+
+  for (const week of monthMatrix(year, month)) {
+    rows.push(
+      week.map((day) => {
+        if (day === 0) return { text: BLANK, callback_data: NOOP }
+        if (isBeforeToday(year, month, day, now, timeZone)) return { text: `·${day}`, callback_data: NOOP }
+        return { text: String(day), callback_data: encodeCallback('calday', year, month, day) }
+      }),
+    )
+  }
+
+  const today = toWallClock(now, timeZone)
+  rows.push([
+    { text: 'Сегодня', callback_data: encodeCallback('calday', today.year, today.month, today.day) },
+    { text: '← Назад', callback_data: encodeCallback('when') },
+  ])
+  return { inline_keyboard: rows }
+}
+
+/**
+ * Hour grid for a chosen day. On today, hours already fully past are shown but
+ * not pickable. "Ввести вручную" jumps to a typed HH:MM for the same date.
+ */
+export function hourKeyboard(year: number, month: number, day: number, now: Date, timeZone: string): InlineKeyboard {
+  const today = toWallClock(now, timeZone)
+  const isToday = year === today.year && month === today.month && day === today.day
+
+  const rows: InlineButton[][] = []
+  for (let base = 0; base < 24; base += 6) {
+    rows.push(
+      Array.from({ length: 6 }, (_, i) => {
+        const h = base + i
+        const label = String(h).padStart(2, '0')
+        // On today, an hour whose last minute (h:59) has passed is unusable.
+        if (isToday && h < today.hour) return { text: `·${label}`, callback_data: NOOP }
+        return { text: label, callback_data: encodeCallback('calh', year, month, day, h) }
+      }),
+    )
+  }
+  rows.push([
+    { text: '✏️ Ввести время', callback_data: encodeCallback('calman', year, month, day) },
+    { text: '← Дни', callback_data: encodeCallback('cal') },
+  ])
+  return { inline_keyboard: rows }
+}
+
+/** Minute grid (5-minute steps) for a chosen date+hour. */
+export function minuteKeyboard(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  now: Date,
+  timeZone: string,
+): InlineKeyboard {
+  const today = toWallClock(now, timeZone)
+  const isNowHour = year === today.year && month === today.month && day === today.day && hour === today.hour
+
+  const rows: InlineButton[][] = []
+  for (let base = 0; base < 60; base += 20) {
+    rows.push(
+      Array.from({ length: 4 }, (_, i) => {
+        const mm = base + i * 5
+        const label = ':' + String(mm).padStart(2, '0')
+        if (isNowHour && mm <= today.minute) return { text: `·${label}`, callback_data: NOOP }
+        return { text: label, callback_data: encodeCallback('calm', year, month, day, hour, mm) }
+      }),
+    )
+  }
+  rows.push([
+    { text: '← Часы', callback_data: encodeCallback('calday', year, month, day) },
+    { text: '✏️ Ввести время', callback_data: encodeCallback('calman', year, month, day) },
+  ])
+  return { inline_keyboard: rows }
+}
+
+/** Cancel-only keyboard for the manual-time text step. */
+export function cancelKeyboard(): InlineKeyboard {
+  return { inline_keyboard: [[{ text: '✕ Отмена', callback_data: encodeCallback('cancel') }]] }
 }
 
 export function confirmKeyboard(): InlineKeyboard {
@@ -186,7 +301,7 @@ export function taskDetailKeyboard(task: Task): InlineKeyboard {
   if (task.status === 'active') {
     rows.push([
       { text: '✅ Выполнено', callback_data: encodeCallback('done', task.id) },
-      { text: '⏰ Перенести', callback_data: encodeCallback('snooze', task.id) },
+      { text: '⏰ Изменить время', callback_data: encodeCallback('edittime', task.id) },
     ])
   } else {
     // "Выполнено" is one tap and easy to hit by mistake; without this the only way
@@ -224,7 +339,7 @@ export function reminderKeyboard(taskId: string): InlineKeyboard {
         { text: '⏱ Через 15 минут', callback_data: encodeCallback('snz', taskId, '15m') },
         { text: '⏱ Через 1 час', callback_data: encodeCallback('snz', taskId, '1h') },
       ],
-      [{ text: '📅 Перенести', callback_data: encodeCallback('snooze', taskId) }],
+      [{ text: '📅 Другое время', callback_data: encodeCallback('edittime', taskId) }],
     ],
   }
 }
@@ -322,13 +437,63 @@ export function askTitleCard(): string {
   return ['➕ <b>Новая задача</b>', '', 'Что нужно сделать?'].join('\n')
 }
 
-export function askTimeCard(title: string): string {
+/** The "when?" step: presets + calendar, and it also accepts a typed phrase. */
+export function askWhenCard(title: string, editing = false): string {
   return [
-    '➕ <b>Новая задача</b>',
+    editing ? '⏰ <b>Изменить время</b>' : '➕ <b>Новая задача</b>',
     '',
     escapeHtml(truncate(title, TITLE_LIMIT)),
     '',
-    'Когда напомнить?',
+    '<b>Когда напомнить?</b>',
+    'Выберите кнопкой или напишите словами:',
+    '<i>«завтра в 18», «через 3 часа», «1 августа 09:30»</i>',
+  ].join('\n')
+}
+
+const MONTHS_GENITIVE = [
+  'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+]
+
+/** "15 августа 2026" for a Y/M/D chosen in the calendar. */
+function longDate(year: number, month: number, day: number): string {
+  return `${day} ${MONTHS_GENITIVE[month - 1]} ${year}`
+}
+
+export function calendarCard(): string {
+  return ['📅 <b>Выберите дату</b>', '', 'Или напишите словами, например <i>«завтра в 18»</i>.'].join('\n')
+}
+
+export function hourCard(year: number, month: number, day: number): string {
+  return [`📅 <b>${longDate(year, month, day)}</b>`, '', 'Выберите час:'].join('\n')
+}
+
+export function minuteCard(year: number, month: number, day: number, hour: number): string {
+  return [`📅 <b>${longDate(year, month, day)}, ${String(hour).padStart(2, '0')}:__</b>`, '', 'Выберите минуты:'].join('\n')
+}
+
+export function manualTimeCard(year: number, month: number, day: number): string {
+  return [
+    `📅 <b>${longDate(year, month, day)}</b>`,
+    '',
+    'Введите время сообщением, например <code>14:30</code> или <code>9:05</code>.',
+  ].join('\n')
+}
+
+export function invalidTimeCard(): string {
+  return [
+    '⚠️ <b>Не понял время</b>',
+    '',
+    'Нужен формат <code>ЧЧ:ММ</code>, например <code>14:30</code>. И время в будущем.',
+  ].join('\n')
+}
+
+export function invalidWhenCard(): string {
+  return [
+    '⚠️ <b>Не получилось разобрать</b>',
+    '',
+    'Попробуйте словами — <i>«завтра в 18», «через 2 часа», «1 августа 09:30»</i> —',
+    'или выберите дату кнопкой 📅.',
   ].join('\n')
 }
 

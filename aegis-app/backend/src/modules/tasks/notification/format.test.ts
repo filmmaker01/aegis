@@ -12,7 +12,10 @@ import {
   mainMenuKeyboard,
   pluralRu,
   reminderKeyboard,
-  slotKeyboard,
+  whenKeyboard,
+  calendarKeyboard,
+  hourKeyboard,
+  minuteKeyboard,
   splitText,
   taskDetailCard,
   taskDetailKeyboard,
@@ -133,7 +136,10 @@ describe('callback_data codec', () => {
   test('every real payload fits Telegram 64-byte limit', () => {
     const payloads = [
       ...mainMenuKeyboard().inline_keyboard.flat(),
-      ...slotKeyboard().inline_keyboard.flat(),
+      ...whenKeyboard().inline_keyboard.flat(),
+      ...calendarKeyboard(2026, 8, NOW, MSK).inline_keyboard.flat(),
+      ...hourKeyboard(2026, 8, 15, NOW, MSK).inline_keyboard.flat(),
+      ...minuteKeyboard(2026, 8, 15, 14, NOW, MSK).inline_keyboard.flat(),
       ...timezoneKeyboard().inline_keyboard.flat(),
       ...reminderKeyboard(UUID).inline_keyboard.flat(),
       ...taskDetailKeyboard(task()).inline_keyboard.flat(),
@@ -155,14 +161,14 @@ describe('callback_data codec', () => {
 })
 
 describe('keyboards', () => {
-  test('the time picker offers exactly the product slots', () => {
-    const data = slotKeyboard().inline_keyboard.flat().map((b) => b.callback_data)
-    expect(data).toEqual(['slot:30m', 'slot:1h', 'slot:evening', 'slot:morning', 'slot:custom', 'slot:none', 'cancel'])
+  test('the when-step offers presets, a calendar, none, and cancel', () => {
+    const data = whenKeyboard().inline_keyboard.flat().map((b) => b.callback_data)
+    expect(data).toEqual(['slot:30m', 'slot:1h', 'slot:evening', 'slot:morning', 'cal', 'slot:none', 'cancel'])
   })
 
   test('the reminder keyboard offers done / +15m / +1h / reschedule', () => {
     const data = reminderKeyboard(UUID).inline_keyboard.flat().map((b) => b.callback_data)
-    expect(data).toEqual([`done:${UUID}`, `snz:${UUID}:15m`, `snz:${UUID}:1h`, `snooze:${UUID}`])
+    expect(data).toEqual([`done:${UUID}`, `snz:${UUID}:15m`, `snz:${UUID}:1h`, `edittime:${UUID}`])
   })
 
   test('a completed task swaps done/snooze for an undo', () => {
@@ -264,5 +270,51 @@ describe('timezoneLabel', () => {
     const card = timezoneCard('Europe/Moscow', NOW)
     expect(card).toContain('Москва (UTC+3)')
     expect(card).not.toContain('Europe/Moscow')
+  })
+})
+
+describe('calendar keyboards', () => {
+  const NOW2 = new Date('2026-08-10T09:00:00Z') // 10 Aug, 12:00 MSK
+
+  test('calendar has month nav, weekday header, and day buttons', () => {
+    const kb = calendarKeyboard(2026, 8, NOW2, MSK)
+    const flat = kb.inline_keyboard.flat()
+    // nav arrows
+    expect(flat.some((b) => b.callback_data === 'calnav:2026:7')).toBe(true)
+    expect(flat.some((b) => b.callback_data === 'calnav:2026:9')).toBe(true)
+    // a future day is pickable
+    expect(flat.some((b) => b.callback_data === 'calday:2026:8:15')).toBe(true)
+    // a past day (Aug 5, before Aug 10) is NOT pickable (noop)
+    const aug5 = flat.find((b) => b.text === '·5')
+    expect(aug5?.callback_data).toBe('noop')
+    // today button + back
+    expect(flat.some((b) => b.callback_data === 'calday:2026:8:10')).toBe(true)
+    expect(flat.some((b) => b.callback_data === 'when')).toBe(true)
+  })
+
+  test('December calendar wraps the year in nav', () => {
+    const flat = calendarKeyboard(2026, 12, NOW2, MSK).inline_keyboard.flat()
+    expect(flat.some((b) => b.callback_data === 'calnav:2027:1')).toBe(true)
+    expect(flat.some((b) => b.callback_data === 'calnav:2026:11')).toBe(true)
+  })
+
+  test('hour keyboard offers 24 hours plus manual entry', () => {
+    const flat = hourKeyboard(2026, 8, 15, NOW2, MSK).inline_keyboard.flat()
+    expect(flat.filter((b) => b.callback_data?.startsWith('calh:2026:8:15:'))).toHaveLength(24)
+    expect(flat.some((b) => b.callback_data === 'calman:2026:8:15')).toBe(true)
+  })
+
+  test('minute keyboard offers 5-minute steps', () => {
+    const flat = minuteKeyboard(2026, 8, 15, 14, NOW2, MSK).inline_keyboard.flat()
+    const mins = flat.filter((b) => b.callback_data?.startsWith('calm:2026:8:15:14:'))
+    expect(mins).toHaveLength(12) // :00 :05 … :55
+    expect(mins[0]!.callback_data).toBe('calm:2026:8:15:14:0')
+  })
+
+  test('on today, past hours are not pickable', () => {
+    // today = 10 Aug, 12:00 MSK -> hour 09 is past, 12 and 18 are ok
+    const flat = hourKeyboard(2026, 8, 10, NOW2, MSK).inline_keyboard.flat()
+    expect(flat.find((b) => b.text === '·09')?.callback_data).toBe('noop')
+    expect(flat.some((b) => b.callback_data === 'calh:2026:8:10:18')).toBe(true)
   })
 })
