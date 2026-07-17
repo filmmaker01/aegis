@@ -1,7 +1,45 @@
-# Aegis — roadmap (app)
+# Roadmap (app)
 
-Mirrors the product roadmap ([`../../docs/07-roadmap.md`](../../docs/07-roadmap.md)) and tracks
-where the **app** is. Current position: **end of foundation setup**.
+## Current product: Telegram task planner
+
+The repository was **repurposed** from Aegis (a Business Bot archiving deleted messages) into a
+personal **task planner bot**. Everything under "Retired product — Aegis" below is history: that
+code, its tables, its media pipeline and its Mini App screens no longer exist.
+
+### Done — planner MVP
+- ✅ **Schema + migration** (`20260717000000_tasks_replace_archive`): `bot_users`, `tasks`,
+  `task_drafts` (+ RLS, deny-by-default). Drops all archive tables. Instants stored in UTC.
+- ✅ **Bot conversation** (`backend/src/modules/tasks`): `/start` timezone onboarding, create
+  wizard (title → slot → confirm), task list/detail, done / snooze / edit / delete, `/today`.
+  Cards are edited in place; every task id is resolved owner-scoped (anti-enumeration).
+- ✅ **Reminders**: in-process ticker (`REMINDER_SWEEP_SECONDS`, default 30s) + a
+  `reminders:dispatch` cron task as a safety net. Atomic claim before send ⇒ never delivered
+  twice; a failed send is released and retried.
+- ✅ **Timezones**: chosen at `/start`, changeable via `/settings`; wall-clock slots resolved via
+  Intl (DST-correct), no new dependency.
+- ✅ **Reused** from Aegis: webhook ingress + `update_id` idempotency, Bot API client, HTML
+  escaping / length limits / `callback_data` codec, the owner-check callback pattern, module
+  layering.
+- ✅ **Tested**: 164 backend unit tests + 37 webapp; typecheck and `architecture:check` green
+  (the latter went from 21 pre-existing violations to 0).
+
+### Next
+- ⚠️ **Apply the migration.** `20260717000000_tasks_replace_archive` **drops the archive tables**
+  and has NOT been run against production Supabase. Review, back up, then `prisma migrate deploy`.
+- Set the production webhook to `/telegram/webhook` and verify `setMyCommands` published the list.
+- Integration test against real Postgres: `bun run --cwd backend test:pg`.
+- Doc drift: `aegis-architecture.md`, `notification-ux.md`, `telegram-api-findings.md`,
+  `media-storage-production.md`, `../../docs/*` and `.claude/agents/aegis-lead.md` still describe
+  the retired product.
+- Not planned yet: recurring tasks, a Mini App UI, subscriptions/payments.
+
+---
+
+# Retired product — Aegis (history)
+
+> Kept for context only. None of the code described below remains in the tree.
+
+Mirrored the product roadmap ([`../../docs/07-roadmap.md`](../../docs/07-roadmap.md)).
 
 ## Phase 0 — Foundation ✅ (this stage)
 - Research tool (`api-probe`) fixed and runnable.

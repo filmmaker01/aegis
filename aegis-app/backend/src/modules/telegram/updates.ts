@@ -1,71 +1,52 @@
-import type { IngestService } from '../archive/application/ingest-service'
-import type {
-  IncomingBusinessConnection,
-  IncomingCallback,
-  IncomingDeletion,
-  IncomingMessage,
-  MediaItem,
-  MediaType,
-} from '../archive/domain/types'
+/**
+ * A parsed callback_query from an inline button press. `chatId`/`messageId`
+ * identify the message the button lives on, and `fromTgId` is the presser —
+ * which consumers check against the owner of whatever the button acts on.
+ */
+export interface IncomingCallback {
+  /** callback_query.id — echoed back to answerCallbackQuery. */
+  id: string
+  fromTgId: number
+  chatId: number
+  messageId: number
+  /** callback_data payload (action:parts…). */
+  data: string
+}
 
-/** Handles a parsed callback_query (implemented by the archive CallbackService). */
-export interface CallbackHandler {
-  handle(cb: IncomingCallback): Promise<void>
+/** A parsed private text message (a command or free-text input). */
+export interface IncomingMessage {
+  fromTgId: number
+  chatId: number
+  messageId: number
+  text: string
+}
+
+/** Handles parsed updates (implemented by the tasks BotService). */
+export interface UpdateHandler {
+  /** Atomically claim an update_id; false means it was already processed. */
+  claim(updateId: number): Promise<boolean>
+  onMessage(message: IncomingMessage): Promise<void>
+  onCallback(callback: IncomingCallback): Promise<void>
 }
 
 /** Minimal raw Telegram shapes (permissive — we only read what we map). */
 interface RawUser {
   id: number
+  is_bot?: boolean
   [k: string]: unknown
 }
 interface RawChat {
   id: number
   type?: string
-  title?: string
-  first_name?: string
-  username?: string
-  [k: string]: unknown
-}
-interface RawFile {
-  file_id: string
-  file_unique_id?: string
-  mime_type?: string
-  file_size?: number
   [k: string]: unknown
 }
 interface RawMessage {
   message_id: number
-  business_connection_id?: string
   from?: RawUser
   chat?: RawChat
   date?: number
-  edit_date?: number
   text?: string
-  caption?: string
-  sender_business_bot?: RawUser
-  photo?: RawFile[]
-  voice?: RawFile
-  video?: RawFile
-  video_note?: RawFile
-  audio?: RawFile
-  document?: RawFile
-  animation?: RawFile
-  sticker?: RawFile
   [k: string]: unknown
-}
-interface RawBusinessConnection {
-  id: string
-  user?: RawUser
-  user_chat_id?: number
-  date?: number
-  rights?: Record<string, boolean>
-  is_enabled?: boolean
-  [k: string]: unknown
-}
-interface RawDeleted {
-  business_connection_id: string
-  chat: RawChat
-  message_ids: number[]
 }
 interface RawCallbackQuery {
   id: string
@@ -76,103 +57,27 @@ interface RawCallbackQuery {
 }
 export interface RawUpdate {
   update_id: number
-  business_connection?: RawBusinessConnection
-  business_message?: RawMessage
-  edited_business_message?: RawMessage
-  deleted_business_messages?: RawDeleted
+  message?: RawMessage
   callback_query?: RawCallbackQuery
   [k: string]: unknown
 }
 
-const SIMPLE_MEDIA: MediaType[] = [
-  'voice',
-  'video',
-  'video_note',
-  'audio',
-  'document',
-  'animation',
-  'sticker',
-]
-
-function extractMedia(m: RawMessage): MediaItem[] {
-  const items: MediaItem[] = []
-  if (m.photo && m.photo.length > 0) {
-    const largest = m.photo[m.photo.length - 1]!
-    items.push({
-      type: 'photo',
-      tgFileId: largest.file_id,
-      tgFileUniqueId: largest.file_unique_id,
-      sizeBytes: largest.file_size,
-    })
-  }
-  for (const type of SIMPLE_MEDIA) {
-    const f = m[type] as RawFile | undefined
-    if (f?.file_id) {
-      items.push({
-        type,
-        tgFileId: f.file_id,
-        tgFileUniqueId: f.file_unique_id,
-        mimeType: f.mime_type,
-        sizeBytes: f.file_size,
-      })
-    }
-  }
-  return items
-}
-
-function peerLabels(chat?: RawChat): { peerTitle?: string | null; peerUsername?: string | null } {
-  return {
-    peerTitle: chat?.title ?? chat?.first_name ?? null,
-    peerUsername: chat?.username ?? null,
-  }
-}
-
 /**
- * Direction heuristic for a private business chat: chat.id equals the partner's
- * user id, so a message whose sender is the partner is incoming; anything sent
- * on behalf of the owner (owner's own id, or via sender_business_bot) is outgoing.
+ * Map a raw Message to the planner's input.
+ *
+ * Private chats only: the planner is a personal tool, and a group message would
+ * otherwise let one member drive another's task list. Bots and non-text messages
+ * are ignored.
  */
-function directionOf(m: RawMessage): 'incoming' | 'outgoing' {
-  if (m.sender_business_bot) return 'outgoing'
-  if (m.from && m.chat && m.from.id !== m.chat.id) return 'outgoing'
-  return 'incoming'
-}
-
 export function toIncomingMessage(m: RawMessage): IncomingMessage | null {
-  if (!m.business_connection_id || !m.chat) return null
-  const media = extractMedia(m)
+  if (!m.from || m.from.is_bot) return null
+  if (!m.chat || m.chat.type !== 'private') return null
+  if (typeof m.text !== 'string' || m.text.trim().length === 0) return null
   return {
-    connectionId: m.business_connection_id,
-    tgChatId: m.chat.id,
-    tgMessageId: m.message_id,
-    direction: directionOf(m),
-    fromTgId: m.from?.id,
-    sentAt: m.date ? new Date(m.date * 1000) : new Date(),
-    editDate: m.edit_date ? new Date(m.edit_date * 1000) : undefined,
-    text: m.text ?? m.caption ?? null,
-    media,
-    ...peerLabels(m.chat),
-    raw: m,
-  }
-}
-
-export function toIncomingConnection(bc: RawBusinessConnection): IncomingBusinessConnection | null {
-  if (!bc.id || !bc.user || bc.user_chat_id == null) return null
-  return {
-    connectionId: bc.id,
-    ownerTgUserId: bc.user.id,
-    tgUserChatId: bc.user_chat_id,
-    rights: bc.rights ?? {},
-    isEnabled: bc.is_enabled ?? false,
-    connectedAt: bc.date ? new Date(bc.date * 1000) : new Date(),
-  }
-}
-
-export function toIncomingDeletion(d: RawDeleted): IncomingDeletion {
-  return {
-    connectionId: d.business_connection_id,
-    tgChatId: d.chat.id,
-    tgMessageIds: d.message_ids ?? [],
+    fromTgId: m.from.id,
+    chatId: m.chat.id,
+    messageId: m.message_id,
+    text: m.text,
   }
 }
 
@@ -188,53 +93,34 @@ export function toIncomingCallback(cq: RawCallbackQuery): IncomingCallback | nul
 }
 
 /**
- * Routes a raw Update to the ingest service. Applies update-level idempotency
- * (claimUpdate) so replayed updates are ignored. Returns the handled type or null.
+ * Routes a raw Update to the bot service. Applies update-level idempotency
+ * (claim) so replayed updates are ignored. Returns the handled type or null.
  */
 export async function dispatchUpdate(
   update: RawUpdate,
-  ingest: IngestService,
-  callback?: CallbackHandler,
+  handler: UpdateHandler,
 ): Promise<string | null> {
   if (typeof update.update_id !== 'number') return null
-  const claimed = await ingest.claim(update.update_id)
+  const claimed = await handler.claim(update.update_id)
   if (!claimed) {
-    console.log(`[ingest] update_id=${update.update_id} type=duplicate (skipped)`)
+    console.log(`[update] update_id=${update.update_id} type=duplicate (skipped)`)
     return 'duplicate'
   }
 
-  // Safe diagnostics only: type, update_id, message id(s). Never text/PII/tokens.
-  if (update.business_connection) {
-    console.log(`[ingest] update_id=${update.update_id} type=business_connection`)
-    const parsed = toIncomingConnection(update.business_connection)
-    if (parsed) await ingest.onBusinessConnection(parsed)
-    return 'business_connection'
-  }
-  if (update.business_message) {
-    console.log(`[ingest] update_id=${update.update_id} type=business_message message_id=${update.business_message.message_id}`)
-    const parsed = toIncomingMessage(update.business_message)
-    if (parsed) await ingest.onBusinessMessage(parsed)
-    return 'business_message'
-  }
-  if (update.edited_business_message) {
-    console.log(`[ingest] update_id=${update.update_id} type=edited_business_message message_id=${update.edited_business_message.message_id}`)
-    const parsed = toIncomingMessage(update.edited_business_message)
-    if (parsed) await ingest.onEditedBusinessMessage(parsed)
-    return 'edited_business_message'
-  }
-  if (update.deleted_business_messages) {
-    const ids = update.deleted_business_messages.message_ids ?? []
-    console.log(`[ingest] update_id=${update.update_id} type=deleted_business_messages count=${ids.length} message_ids=[${ids.join(',')}]`)
-    await ingest.onDeletedBusinessMessages(toIncomingDeletion(update.deleted_business_messages))
-    return 'deleted_business_messages'
+  // Safe diagnostics only: type and update_id. Never message text or user ids.
+  if (update.message) {
+    console.log(`[update] update_id=${update.update_id} type=message`)
+    const parsed = toIncomingMessage(update.message)
+    if (parsed) await handler.onMessage(parsed)
+    return 'message'
   }
   if (update.callback_query) {
-    // Never log callback_data (it carries an opaque id) — only the type.
-    console.log(`[ingest] update_id=${update.update_id} type=callback_query`)
+    // Never log callback_data (it carries a task id) — only the type.
+    console.log(`[update] update_id=${update.update_id} type=callback_query`)
     const parsed = toIncomingCallback(update.callback_query)
-    if (parsed && callback) await callback.handle(parsed)
+    if (parsed) await handler.onCallback(parsed)
     return 'callback_query'
   }
-  console.log(`[ingest] update_id=${update.update_id} type=ignored`)
+  console.log(`[update] update_id=${update.update_id} type=ignored`)
   return 'ignored'
 }

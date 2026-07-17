@@ -1,154 +1,167 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 
-import { IngestService } from '../archive/application/ingest-service'
-import type { Notifier } from '../archive/application/ports'
-import { InMemoryArchiveRepository } from '../archive/infrastructure/in-memory-repository'
 import {
   dispatchUpdate,
   toIncomingCallback,
   toIncomingMessage,
-  type CallbackHandler,
-  type RawUpdate,
+  type IncomingCallback,
+  type IncomingMessage,
+  type UpdateHandler,
 } from './updates'
-import type { IncomingCallback } from '../archive/domain/types'
 
-const noopNotifier: Notifier = {
-  async notifyDeletion() {},
-  async notifyEdit() {},
-  async notifyBatchDeletion() {},
-}
-const CONN = 'gPOdZrconn0000000000000000'
-const OWNER = 700
-const PARTNER = 5001
-
-let repo: InMemoryArchiveRepository
-let ingest: IngestService
-
-beforeEach(() => {
-  repo = new InMemoryArchiveRepository()
-  ingest = new IngestService({ repository: repo, notifier: noopNotifier, clock: { now: () => new Date() } })
-})
-
-const connUpdate: RawUpdate = {
-  update_id: 1,
-  business_connection: {
-    id: CONN,
-    user: { id: OWNER },
-    user_chat_id: OWNER,
-    date: 1784066388,
-    is_enabled: true,
-    rights: { can_read_messages: true },
-  },
-}
-
-function msgUpdate(update_id: number, message_id: number, text: string): RawUpdate {
-  return {
-    update_id,
-    business_message: {
-      message_id,
-      business_connection_id: CONN,
-      from: { id: PARTNER },
-      chat: { id: PARTNER, type: 'private', first_name: 'Partner' },
-      date: 1784067576,
-      text,
+function recordingHandler(claimResult = true) {
+  const messages: IncomingMessage[] = []
+  const callbacks: IncomingCallback[] = []
+  const claimed: number[] = []
+  const handler: UpdateHandler = {
+    async claim(updateId) {
+      claimed.push(updateId)
+      return claimResult
+    },
+    async onMessage(message) {
+      messages.push(message)
+    },
+    async onCallback(callback) {
+      callbacks.push(callback)
     },
   }
+  return { handler, messages, callbacks, claimed }
 }
 
+const privateChat = { id: 42, type: 'private' }
+
+describe('toIncomingMessage', () => {
+  test('maps a private text message', () => {
+    expect(
+      toIncomingMessage({ message_id: 7, from: { id: 42 }, chat: privateChat, text: 'Купить хлеб' }),
+    ).toEqual({ fromTgId: 42, chatId: 42, messageId: 7, text: 'Купить хлеб' })
+  })
+
+  test('ignores group chats — the planner is personal', () => {
+    expect(
+      toIncomingMessage({ message_id: 7, from: { id: 42 }, chat: { id: -100, type: 'group' }, text: 'hi' }),
+    ).toBeNull()
+  })
+
+  test('ignores bots, missing sender, non-text and blank text', () => {
+    expect(toIncomingMessage({ message_id: 1, from: { id: 1, is_bot: true }, chat: privateChat, text: 'x' })).toBeNull()
+    expect(toIncomingMessage({ message_id: 1, chat: privateChat, text: 'x' })).toBeNull()
+    expect(toIncomingMessage({ message_id: 1, from: { id: 1 }, chat: privateChat })).toBeNull()
+    expect(toIncomingMessage({ message_id: 1, from: { id: 1 }, chat: privateChat, text: '   ' })).toBeNull()
+  })
+})
+
+describe('toIncomingCallback', () => {
+  test('maps a callback query', () => {
+    expect(
+      toIncomingCallback({
+        id: 'cb1',
+        from: { id: 42 },
+        message: { message_id: 9, chat: privateChat },
+        data: 'open:abc',
+      }),
+    ).toEqual({ id: 'cb1', fromTgId: 42, chatId: 42, messageId: 9, data: 'open:abc' })
+  })
+
+  test('rejects a callback without data or message', () => {
+    expect(
+      toIncomingCallback({ id: 'cb1', from: { id: 42 }, message: { message_id: 9, chat: privateChat } }),
+    ).toBeNull()
+    expect(toIncomingCallback({ id: 'cb1', from: { id: 42 }, data: 'x' })).toBeNull()
+  })
+})
+
 describe('dispatchUpdate', () => {
-  test('maps and ingests a business_connection', async () => {
-    expect(await dispatchUpdate(connUpdate, ingest)).toBe('business_connection')
-    expect((await repo.getConnection(CONN))?.tgUserChatId).toBe(OWNER)
+  test('routes a message', async () => {
+    const { handler, messages } = recordingHandler()
+    const handled = await dispatchUpdate(
+      { update_id: 1, message: { message_id: 7, from: { id: 42 }, chat: privateChat, text: '/new' } },
+      handler,
+    )
+    expect(handled).toBe('message')
+    expect(messages).toHaveLength(1)
+    expect(messages[0]!.text).toBe('/new')
   })
 
-  test('maps and archives a business_message', async () => {
-    await dispatchUpdate(connUpdate, ingest)
-    expect(await dispatchUpdate(msgUpdate(2, 935359, 'hello'), ingest)).toBe('business_message')
-    const stored = await repo.findMessage(CONN, PARTNER, 935359)
-    expect(stored?.currentText).toBe('hello')
-    expect(stored?.direction).toBe('incoming')
-  })
-
-  test('deleted_business_messages marks archived message deleted', async () => {
-    await dispatchUpdate(connUpdate, ingest)
-    await dispatchUpdate(msgUpdate(2, 935359, 'bye'), ingest)
-    const del: RawUpdate = {
-      update_id: 3,
-      deleted_business_messages: { business_connection_id: CONN, chat: { id: PARTNER }, message_ids: [935359] },
-    }
-    expect(await dispatchUpdate(del, ingest)).toBe('deleted_business_messages')
-    expect((await repo.findMessage(CONN, PARTNER, 935359))?.isDeleted).toBe(true)
-  })
-
-  test('duplicate update_id is ignored', async () => {
-    await dispatchUpdate(connUpdate, ingest)
-    await dispatchUpdate(msgUpdate(2, 1, 'a'), ingest)
-    expect(await dispatchUpdate(msgUpdate(2, 1, 'DIFFERENT'), ingest)).toBe('duplicate')
-    // text unchanged because the duplicate update_id short-circuits
-    expect((await repo.findMessage(CONN, PARTNER, 1))?.currentText).toBe('a')
-  })
-
-  test('media message maps a photo item and sets hasMedia', () => {
-    const parsed = toIncomingMessage({
-      message_id: 935363,
-      business_connection_id: CONN,
-      chat: { id: PARTNER, type: 'private' },
-      date: 1784067576,
-      photo: [
-        { file_id: 'small', file_unique_id: 'u1', file_size: 100 },
-        { file_id: 'large', file_unique_id: 'u2', file_size: 215365 },
-      ],
-    })
-    expect(parsed?.media).toHaveLength(1)
-    expect(parsed?.media[0]?.tgFileId).toBe('large') // largest variant
-    expect(parsed?.media[0]?.type).toBe('photo')
-  })
-
-  test('callback_query routes to the callback handler', async () => {
-    const seen: IncomingCallback[] = []
-    const handler: CallbackHandler = {
-      async handle(c) {
-        seen.push(c)
+  test('routes a callback query', async () => {
+    const { handler, callbacks } = recordingHandler()
+    const handled = await dispatchUpdate(
+      {
+        update_id: 2,
+        callback_query: {
+          id: 'cb',
+          from: { id: 42 },
+          message: { message_id: 9, chat: privateChat },
+          data: 'list',
+        },
       },
-    }
-    const update: RawUpdate = {
-      update_id: 50,
-      callback_query: {
-        id: 'q1',
-        from: { id: OWNER },
-        message: { message_id: 111, chat: { id: OWNER, type: 'private' } },
-        data: 'restore:ev-123',
+      handler,
+    )
+    expect(handled).toBe('callback_query')
+    expect(callbacks[0]!.data).toBe('list')
+  })
+
+  test('skips an update whose id was already claimed (Telegram retry)', async () => {
+    const { handler, messages } = recordingHandler(false)
+    const handled = await dispatchUpdate(
+      { update_id: 3, message: { message_id: 7, from: { id: 42 }, chat: privateChat, text: 'hi' } },
+      handler,
+    )
+    expect(handled).toBe('duplicate')
+    expect(messages).toHaveLength(0)
+  })
+
+  test('claims before doing any work', async () => {
+    const { handler, claimed } = recordingHandler()
+    await dispatchUpdate(
+      { update_id: 11, message: { message_id: 1, from: { id: 42 }, chat: privateChat, text: 'x' } },
+      handler,
+    )
+    expect(claimed).toEqual([11])
+  })
+
+  test('ignores an unknown update type and a malformed update', async () => {
+    const { handler } = recordingHandler()
+    expect(await dispatchUpdate({ update_id: 4, poll: {} }, handler)).toBe('ignored')
+    expect(await dispatchUpdate({} as never, handler)).toBeNull()
+  })
+
+  test('a leftover business_* update is ignored, not an error', async () => {
+    // The bot is still registered as a Business bot, and the webhook may still be
+    // subscribed to these types until setWebhook is re-run. They must land softly
+    // rather than 500 and make Telegram retry forever.
+    const { handler, messages, callbacks } = recordingHandler()
+
+    for (const update of [
+      { update_id: 20, business_connection: { id: 'bc', user: { id: 1 }, user_chat_id: 1 } },
+      {
+        update_id: 21,
+        business_message: { message_id: 1, business_connection_id: 'bc', chat: { id: 5 }, text: 'привет' },
       },
+      {
+        update_id: 22,
+        edited_business_message: { message_id: 1, business_connection_id: 'bc', chat: { id: 5 }, text: 'правка' },
+      },
+      {
+        update_id: 23,
+        deleted_business_messages: { business_connection_id: 'bc', chat: { id: 5 }, message_ids: [1, 2] },
+      },
+    ]) {
+      expect(await dispatchUpdate(update, handler)).toBe('ignored')
     }
-    expect(await dispatchUpdate(update, ingest, handler)).toBe('callback_query')
-    expect(seen).toHaveLength(1)
-    expect(seen[0]?.data).toBe('restore:ev-123')
-    expect(seen[0]?.fromTgId).toBe(OWNER)
+
+    // Crucially, a business_message must NOT be mistaken for a planner command.
+    expect(messages).toHaveLength(0)
+    expect(callbacks).toHaveLength(0)
   })
 
-  test('callback_query without a handler is a no-op (still handled)', async () => {
-    const update: RawUpdate = {
-      update_id: 51,
-      callback_query: { id: 'q2', from: { id: OWNER }, message: { message_id: 1, chat: { id: OWNER } }, data: 'archive:x' },
-    }
-    expect(await dispatchUpdate(update, ingest)).toBe('callback_query')
-  })
-
-  test('toIncomingCallback returns null on incomplete payloads', () => {
-    expect(toIncomingCallback({ id: 'x', data: 'restore:1' })).toBeNull() // no from/message
-    expect(toIncomingCallback({ id: 'x', from: { id: 1 }, message: { message_id: 1, chat: { id: 2 } }, data: 'ok' })).not.toBeNull()
-  })
-
-  test('outgoing detection via sender_business_bot', () => {
-    const parsed = toIncomingMessage({
-      message_id: 1,
-      business_connection_id: CONN,
-      from: { id: OWNER },
-      chat: { id: PARTNER, type: 'private' },
-      sender_business_bot: { id: 42 },
-      date: 1784067576,
-      text: 'reply',
-    })
-    expect(parsed?.direction).toBe('outgoing')
+  test('claims but does not deliver an unparseable message (e.g. a photo)', async () => {
+    const { handler, messages } = recordingHandler()
+    const handled = await dispatchUpdate(
+      { update_id: 5, message: { message_id: 7, from: { id: 42 }, chat: privateChat } },
+      handler,
+    )
+    expect(handled).toBe('message')
+    expect(messages).toHaveLength(0)
   })
 })

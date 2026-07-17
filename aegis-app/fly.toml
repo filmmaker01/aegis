@@ -1,4 +1,4 @@
-# Fly.io config for the Aegis backend (always-on: webhook + in-process media worker).
+# Fly.io config for the bot backend (always-on: webhook + in-process reminder ticker).
 # Alternative host: Railway (Dockerfile auto-detected; set start cmd `bun run start:prod`,
 # env in the dashboard). Secrets are set with `fly secrets set ...`, never committed.
 app = "aegis-backend"
@@ -14,7 +14,7 @@ primary_region = "fra"
 [http_service]
   internal_port = 3000
   force_https = true
-  # Always-on: the media worker runs in-process and the webhook must stay reachable.
+  # Always-on: the reminder ticker runs in-process and the webhook must stay reachable.
   auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
