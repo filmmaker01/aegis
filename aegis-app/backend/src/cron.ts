@@ -1,3 +1,5 @@
+import { storeFor } from './app'
+import { createTasksModule } from './modules/tasks'
 import { createBackendRuntime, type BackendRuntime } from './runtime'
 
 type CronTask = (runtime: BackendRuntime) => Promise<void>
@@ -9,6 +11,20 @@ const cronTasks = {
   'db:ping': async ({ prisma }) => {
     await prisma.$queryRaw`SELECT 1`
     console.log('Cron db:ping task completed.')
+  },
+  /**
+   * One reminder sweep. The always-on server already sweeps every
+   * REMINDER_SWEEP_SECONDS; this exists as a safety net for hosts that scale the
+   * web process to zero. Claiming is atomic, so running both is safe — the two
+   * can never deliver the same reminder twice.
+   */
+  'reminders:dispatch': async (runtime) => {
+    const tasks = createTasksModule({ env: runtime.env, db: storeFor(runtime.env, runtime.prisma) })
+    const report = await tasks.reminders.sweep()
+    console.log(
+      `Cron reminders:dispatch task completed (sent=${report.sent} retried=${report.retried} ` +
+        `failed=${report.failed} reclaimed=${report.reclaimed}).`,
+    )
   },
 } satisfies Record<string, CronTask>
 

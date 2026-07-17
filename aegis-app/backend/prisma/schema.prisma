@@ -38,149 +38,89 @@ model AuthSession {
   @@map("auth_sessions")
 }
 
-// ─── Aegis archive (Phase 2 MVP) ──────────────────────────────────────────────
-// Stores messages on arrival so a deleted message's saved copy can be shown.
-// Telegram ids: user/chat ids can exceed 2^31 -> BigInt; message_id fits Int.
+// ─── Task planner ─────────────────────────────────────────────────────────────
+// The bot's product tables. Telegram user ids exceed 2^31 -> BigInt.
+// ALL instants are stored in UTC; the owner's IANA timezone (bot_users.timezone)
+// is applied only when rendering or when resolving a wall-clock slot to an instant.
 
-model BusinessConnection {
+/// A Telegram user of the bot, plus their preferences. Created on /start.
+model BotUser {
+  id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  telegramUserId BigInt   @unique @map("telegram_user_id")
+  /// IANA name (e.g. "Europe/Moscow"). Null until the user picks one at /start.
+  timezone       String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  tasks  Task[]
+  drafts TaskDraft[]
+
+  @@map("bot_users")
+}
+
+model Task {
   id             String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  connectionId   String    @unique @map("connection_id") // Telegram business_connection_id
-  ownerTgUserId  BigInt    @map("owner_tg_user_id")
-  tgUserChatId   BigInt    @map("tg_user_chat_id")
-  state          String    @default("active") // active | disabled | revoked
-  rights         Json      @default("{}")
-  connectedAt    DateTime  @map("connected_at")
-  disconnectedAt DateTime? @map("disconnected_at")
+  telegramUserId BigInt    @map("telegram_user_id")
+  title          String
+  status         String    @default("active") // active | done
+  /// When to remind, in UTC. Null = task without a reminder.
+  remindAt       DateTime? @map("remind_at")
+  completedAt    DateTime? @map("completed_at")
   createdAt      DateTime  @default(now()) @map("created_at")
   updatedAt      DateTime  @updatedAt @map("updated_at")
 
-  chats    Chat[]
-  messages ArchivedMessage[]
-  deletes  DeletedEvent[]
-  settings NotificationSettings?
+  // ── Reminder delivery state machine ────────────────────────────────────────
+  // pending -> processing -> sent
+  //                       -> retry -> processing -> …
+  //                       -> failed (permanent, or attempts exhausted)
+  // A crashed sweep leaves a row in `processing`; the stalled-claim reaper moves
+  // it back to `retry` after REMINDER_STALLED_AFTER_SECONDS so it is not lost.
 
-  @@index([ownerTgUserId], map: "business_connections_owner_idx")
-  @@map("business_connections")
+  /// pending | processing | sent | retry | failed
+  reminderState  String    @default("pending") @map("reminder_state")
+  /// Delivery attempts made so far (incremented on claim).
+  reminderAttempts Int     @default(0) @map("reminder_attempts")
+  /// Earliest UTC instant the next attempt may be claimed (backoff). Null = now.
+  reminderNextAttemptAt DateTime? @map("reminder_next_attempt_at")
+  /// Set once Telegram has accepted the reminder. Null until then.
+  reminderSentAt DateTime? @map("reminder_sent_at")
+  /// Last transient/permanent failure reason (safe label only, never payloads).
+  reminderFailedReason String? @map("reminder_failed_reason")
+
+  user BotUser @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
+
+  drafts TaskDraft[]
+
+  @@index([telegramUserId, status, remindAt], map: "tasks_user_status_remind_idx")
+  /// Drives the due-reminder scan: only rows still awaiting delivery.
+  @@index([reminderState, remindAt, reminderNextAttemptAt], map: "tasks_reminder_due_idx")
+  /// Drives the stalled-claim reaper.
+  @@index([reminderState, updatedAt], map: "tasks_reminder_stalled_idx")
+  @@map("tasks")
 }
 
-// Per-connection owner preferences for the chat notifications. Defaults are all
-// "on"; usable now directly via the DB, and ready for a Mini App settings UI.
-model NotificationSettings {
-  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  connectionId    String   @unique @db.Uuid @map("connection_id")
-  notifyDeletions Boolean  @default(true) @map("notify_deletions")
-  notifyEdits     Boolean  @default(true) @map("notify_edits")
-  notifyMedia     Boolean  @default(true) @map("notify_media")
-  groupBatches    Boolean  @default(true) @map("group_batches")
-  mutedChats      BigInt[] @default([]) @map("muted_chats") // tg_chat_ids to silence
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
-
-  connection BusinessConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-
-  @@map("notification_settings")
-}
-
-model Chat {
-  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  connectionId  String    @db.Uuid @map("connection_id")
-  tgChatId      BigInt    @map("tg_chat_id")
-  peerTitle     String?   @map("peer_title")
-  peerUsername  String?   @map("peer_username")
-  firstSeenAt   DateTime  @default(now()) @map("first_seen_at")
-  lastMessageAt DateTime? @map("last_message_at")
-
-  connection BusinessConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  messages   ArchivedMessage[]
-  deletes    DeletedEvent[]
-
-  @@unique([connectionId, tgChatId], map: "chats_connection_chat_key")
-  @@index([connectionId, lastMessageAt], map: "chats_connection_last_msg_idx")
-  @@map("chats")
-}
-
-model ArchivedMessage {
-  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  connectionId String   @db.Uuid @map("connection_id")
-  chatId       String   @db.Uuid @map("chat_id")
-  tgMessageId  Int      @map("tg_message_id")
-  direction    String   // incoming | outgoing
-  fromTgId     BigInt?  @map("from_tg_id")
-  sentAt       DateTime @map("sent_at")
-  currentText  String?  @map("current_text")
-  hasMedia     Boolean  @default(false) @map("has_media")
-  isEdited     Boolean  @default(false) @map("is_edited")
-  isDeleted    Boolean  @default(false) @map("is_deleted")
-  receivedAt   DateTime @default(now()) @map("received_at")
-  raw          Json
-
-  connection   BusinessConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  chat         Chat               @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  versions     MessageVersion[]
-  media        Media[]
-  deletedEvent DeletedEvent?
-
-  @@unique([connectionId, chatId, tgMessageId], map: "messages_conn_chat_msg_key")
-  @@index([chatId, sentAt], map: "messages_chat_sent_idx")
-  @@index([connectionId, isDeleted], map: "messages_conn_deleted_idx")
-  @@map("messages")
-}
-
-model MessageVersion {
-  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  messageId  String   @db.Uuid @map("message_id")
-  versionNo  Int      @map("version_no")
-  text       String?
-  editDate   DateTime? @map("edit_date")
-  capturedAt DateTime @default(now()) @map("captured_at")
-  raw        Json
-
-  message ArchivedMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, versionNo], map: "message_versions_msg_version_key")
-  @@map("message_versions")
-}
-
-model DeletedEvent {
-  id            String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  connectionId  String   @db.Uuid @map("connection_id")
-  chatId        String   @db.Uuid @map("chat_id")
-  messageId     String?  @unique @db.Uuid @map("message_id")
-  tgMessageId   Int      @map("tg_message_id")
-  detectedAt    DateTime @default(now()) @map("detected_at")
-  notifiedAt    DateTime? @map("notified_at")
-
-  connection BusinessConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  chat       Chat               @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  message    ArchivedMessage?   @relation(fields: [messageId], references: [id], onDelete: SetNull)
-
-  @@unique([connectionId, chatId, tgMessageId], map: "deleted_events_conn_chat_msg_key")
-  @@index([connectionId, detectedAt], map: "deleted_events_conn_detected_idx")
-  @@map("deleted_events")
-}
-
-model Media {
+/// In-progress conversation state (create/edit wizard). One per user: starting a
+/// new flow replaces the old one, so an abandoned draft can never wedge the bot.
+model TaskDraft {
   id             String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  messageId      String   @db.Uuid @map("message_id")
-  type           String   // photo | voice | video | video_note | audio | document | animation | sticker
-  tgFileId       String   @map("tg_file_id")
-  tgFileUniqueId String?  @map("tg_file_unique_id")
-  fileName       String?  @map("file_name")
-  mimeType       String?  @map("mime_type")
-  sizeBytes      Int?     @map("size_bytes")
-  storageKey     String?  @map("storage_key")
-  checksum       String?  // sha256 of downloaded bytes
-  state          String   @default("pending") // pending | downloading | stored | failed
-  attempts       Int      @default(0)
-  failedReason   String?  @map("failed_reason")
+  telegramUserId BigInt   @unique @map("telegram_user_id")
+  /// awaiting_title | awaiting_time | awaiting_confirm | awaiting_custom_date | awaiting_edit_title
+  step           String
+  title          String?
+  /// Set when the flow edits an existing task instead of creating one.
+  taskId         String?  @db.Uuid @map("task_id")
+  /// The wizard card being edited in place, so we update instead of spamming new messages.
+  cardChatId     BigInt?  @map("card_chat_id")
+  cardMessageId  Int?     @map("card_message_id")
+  /// Pending remind_at (UTC) awaiting confirmation.
+  remindAt       DateTime? @map("remind_at")
   createdAt      DateTime @default(now()) @map("created_at")
-  storedAt       DateTime? @map("stored_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
-  message ArchivedMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user BotUser @relation(fields: [telegramUserId], references: [telegramUserId], onDelete: Cascade)
+  task Task?   @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
-  @@index([state], map: "media_state_idx")
-  @@unique([messageId, tgFileId], map: "media_message_file_key")
-  @@map("media")
+  @@map("task_drafts")
 }
 
 model ProcessedUpdate {

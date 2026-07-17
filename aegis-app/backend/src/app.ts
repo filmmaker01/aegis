@@ -6,18 +6,29 @@ import type { DbClient } from './db'
 import type { AppEnv } from './env'
 import { errorResponse, handleError, validationErrorHook } from './http/errors'
 import { metricsSnapshot } from './monitoring'
-import { createArchiveModule } from './modules/archive'
+import { createTasksModule } from './modules/tasks'
 import { createAuthModule, type AuthHttpEnv } from './modules/auth'
+
+export type TasksModule = ReturnType<typeof createTasksModule>
+
+/** In-memory store is a local-dev fallback; production always uses Postgres. */
+export function storeFor(env: AppEnv, prisma: DbClient): DbClient | undefined {
+  return env.TASKS_STORE === 'memory' ? undefined : prisma
+}
 
 type CreateAppOptions = {
   env: AppEnv
   prisma: DbClient
+  /**
+   * The planner module. Injectable so the server entry can share ONE instance
+   * between the webhook and the reminder ticker — two instances would each hold
+   * their own in-memory store in dev, and reminders would never find their tasks.
+   */
+  tasks?: TasksModule
 }
 
-export function createApp({ env, prisma }: CreateAppOptions) {
+export function createApp({ env, prisma, tasks = createTasksModule({ env, db: storeFor(env, prisma) }) }: CreateAppOptions) {
   const auth = createAuthModule({ db: prisma, env })
-  // Archive can run in-memory (temporary, lost on restart) when Postgres is unavailable.
-  const archive = createArchiveModule({ env, db: env.ARCHIVE_STORE === 'memory' ? undefined : prisma })
   const app = new OpenAPIHono<AuthHttpEnv>({
     defaultHook: validationErrorHook,
   })
@@ -60,9 +71,8 @@ export function createApp({ env, prisma }: CreateAppOptions) {
 
   app.route('/api/auth', auth.routes)
 
-  // Aegis: Telegram Business webhook ingress (secret-token verified) + Mini App read API (initData-auth)
-  app.route('/telegram/webhook', archive.webhookRoutes)
-  app.route('/api/archive', archive.readRoutes)
+  // Planner: Telegram Bot webhook ingress (secret-token verified)
+  app.route('/telegram/webhook', tasks.webhookRoutes)
 
   app.doc('/openapi.json', {
     openapi: '3.0.0',

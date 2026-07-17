@@ -14,9 +14,12 @@
     "build": "bun run prisma:generate && tsc --noEmit",
     "typecheck": "bun run prisma:generate && tsc --noEmit",
     "test": "bun run test:unit && bun run test:integration",
-    "test:unit": "bun test src/env.test.ts src/env.aegis.test.ts src/db.test.ts src/contracts.test.ts src/cron.test.ts src/modules/auth/infrastructure/access-tokens.test.ts src/modules/auth/infrastructure/passwords.test.ts src/modules/auth/infrastructure/refresh-tokens.test.ts src/modules/auth/transport/middleware.test.ts src/modules/auth/transport/routes.test.ts src/storage/service.test.ts src/modules/telegram/init-data.test.ts src/modules/telegram/updates.test.ts src/modules/archive/application/ingest-service.test.ts src/modules/archive/application/query-service.test.ts src/modules/archive/archive.http.test.ts src/modules/telegram/file-client.test.ts src/modules/archive/media/storage.test.ts src/modules/archive/media/download-service.test.ts src/modules/archive/infrastructure/telegram-notifier.test.ts src/modules/archive/infrastructure/in-memory-repository.test.ts src/modules/archive/infrastructure/callback-service.test.ts src/modules/archive/notification/format.test.ts",
+    "test:unit": "bun test src/env.test.ts src/env.bot.test.ts src/db.test.ts src/contracts.test.ts src/cron.test.ts src/modules/auth/infrastructure/access-tokens.test.ts src/modules/auth/infrastructure/passwords.test.ts src/modules/auth/infrastructure/refresh-tokens.test.ts src/modules/auth/transport/middleware.test.ts src/modules/auth/transport/routes.test.ts src/storage/service.test.ts src/modules/telegram/updates.test.ts src/modules/tasks/domain/schedule.test.ts src/modules/tasks/notification/format.test.ts src/modules/tasks/infrastructure/telegram-notifier.test.ts src/modules/tasks/tasks.reminders.test.ts src/modules/tasks/infrastructure/in-memory-repository.test.ts src/modules/tasks/infrastructure/bot-service.test.ts src/modules/tasks/tasks.http.test.ts",
     "test:integration": "bun scripts/test-integration.mjs",
-    "test:pg": "PG_INTEGRATION=1 bun test src/modules/archive/infrastructure/prisma-archive-repository.integration.test.ts src/modules/archive/media/media-pipeline.integration.test.ts",
+    "test:pg": "PG_INTEGRATION=1 bun test src/modules/tasks/infrastructure/prisma-task-repository.integration.test.ts",
+    "test:pg:local": "bun scripts/test-pg-local.mjs",
+    "set-webhook": "bun scripts/set-webhook.mjs",
+    "webhook-info": "bun scripts/set-webhook.mjs --info",
     "smoke:docker": "bun scripts/docker-smoke.mjs",
     "prisma": "prisma",
     "prisma:generate": "bun scripts/prisma-generate.mjs",
@@ -42,6 +45,7 @@
   "devDependencies": {
     "@types/bun": "^1.3.14",
     "@types/pg": "^8.20.0",
+    "embedded-postgres": "17.6.0-beta.15",
     "prisma": "^7.8.0",
     "typescript": "~6.0.3"
   }

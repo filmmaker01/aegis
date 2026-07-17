@@ -44,17 +44,19 @@ const envSchema = z.object({
     ),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(15 * 60),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
-  // Aegis / Telegram (optional in dev; required to run the webhook + Mini App auth)
+  // Telegram (optional in dev; required to run the webhook)
   TELEGRAM_BOT_TOKEN: optionalStringSchema,
   TELEGRAM_WEBHOOK_SECRET: optionalStringSchema,
-  TELEGRAM_INITDATA_MAX_AGE_SECONDS: z.coerce.number().int().positive().optional(),
-  // 'memory' runs the archive in-memory (data is lost on restart) when Postgres is unavailable.
-  ARCHIVE_STORE: z.enum(['memory', 'postgres']).optional(),
-  // Media storage: 'local' (disk fallback) or 's3' (SPACES_*). Default: s3 if configured else local.
-  MEDIA_STORAGE: z.enum(['local', 's3']).optional(),
-  MEDIA_LOCAL_DIR: optionalStringSchema,
-  // Max bytes we attempt to download from Telegram (Bot API caps ~20MB without a local API server).
-  MEDIA_MAX_BYTES: z.coerce.number().int().positive().optional(),
+  // 'memory' runs the planner in-memory (data is lost on restart) when Postgres is unavailable.
+  TASKS_STORE: z.enum(['memory', 'postgres']).optional(),
+  // How often the in-process ticker scans for due reminders.
+  REMINDER_SWEEP_SECONDS: z.coerce.number().int().positive().max(900).default(30),
+  // Delivery attempts before a reminder is given up on (state -> failed).
+  REMINDER_MAX_ATTEMPTS: z.coerce.number().int().positive().max(20).default(5),
+  // How long a `processing` claim may sit before the reaper assumes the sweep that
+  // took it died and returns it to `retry`. Must comfortably exceed a real send;
+  // too low risks re-delivering a slow-but-alive attempt.
+  REMINDER_STALLED_AFTER_SECONDS: z.coerce.number().int().min(60).max(3600).default(300),
   // Optional error tracking (e.g. Sentry). Empty disables it.
   SENTRY_DSN: optionalStringSchema,
   COOKIE_SECURE: booleanStringSchema,
@@ -72,26 +74,24 @@ const envSchema = z.object({
   validateJwtSecret(env, ctx)
   validateCorsOrigins(env, ctx)
   validateStorageEnv(env, ctx)
-  validateAegisProductionEnv(env, ctx)
+  validateBotProductionEnv(env, ctx)
 })
 
 /**
- * Production hard requirements for Aegis. Runs only for production-like runtimes
- * (NODE_ENV=production or COOKIE_SECURE). Fails fast so a misconfigured prod
- * deploy never silently loses data or serves an unauthenticated webhook.
+ * Production hard requirements for the bot. Runs only for production-like
+ * runtimes (NODE_ENV=production or COOKIE_SECURE). Fails fast so a misconfigured
+ * prod deploy never silently loses data or serves an unauthenticated webhook.
  */
-function validateAegisProductionEnv(env: z.infer<typeof envSchema>, ctx: z.RefinementCtx) {
+function validateBotProductionEnv(env: z.infer<typeof envSchema>, ctx: z.RefinementCtx) {
   if (!isProductionLikeRuntime(env)) return
 
   const require = (cond: boolean, path: string, message: string) => {
     if (!cond) ctx.addIssue({ code: 'custom', path: [path], message })
   }
 
-  require(env.ARCHIVE_STORE !== 'memory', 'ARCHIVE_STORE', 'must not be "memory" in production (data would be lost on restart)')
+  require(env.TASKS_STORE !== 'memory', 'TASKS_STORE', 'must not be "memory" in production (tasks would be lost on restart)')
   require(Boolean(env.TELEGRAM_BOT_TOKEN), 'TELEGRAM_BOT_TOKEN', 'is required in production')
   require(Boolean(env.TELEGRAM_WEBHOOK_SECRET), 'TELEGRAM_WEBHOOK_SECRET', 'is required in production')
-  // Containers have ephemeral disks — local media storage would lose files on redeploy.
-  require(env.MEDIA_STORAGE !== 'local', 'MEDIA_STORAGE', 'must be "s3" in production (local disk is ephemeral)')
   require(
     /sslmode=require|supabase\.(co|com)|\.pooler\./i.test(env.DATABASE_URL),
     'DATABASE_URL',

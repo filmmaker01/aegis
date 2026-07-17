@@ -36,8 +36,16 @@
     "smoke:backend:docker": "bun run --cwd backend smoke:docker",
     "e2e:webapp": "bun run --cwd webapp e2e"
   },
-  "description": "Aegis — official Telegram Business Bot + Telegram Mini App (archives messages, records edits, shows saved copy after deletion). Bootstrapped from the Vibe Coding Template (Apache-2.0).",
+  "description": "Telegram task planner bot (create tasks, pick a reminder time, act on the reminder from inline buttons). Bootstrapped from the Vibe Coding Template (Apache-2.0).",
   "dependencies": {
     "hono": "^4.12.30"
-  }
+  },
+  "comment:trustedDependencies": "embedded-postgres downloads a real PostgreSQL binary in a postinstall; Bun blocks that until the package is trusted. One entry per platform, so `test:pg:local` works on every developer machine, not just the one that added it.",
+  "trustedDependencies": [
+    "@embedded-postgres/windows-x64",
+    "@embedded-postgres/linux-x64",
+    "@embedded-postgres/linux-arm64",
+    "@embedded-postgres/darwin-x64",
+    "@embedded-postgres/darwin-arm64"
+  ]
 }
