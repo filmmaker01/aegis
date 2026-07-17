@@ -29,6 +29,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # A pull_request checkout is detached at the merge commit. Two guards in
+      # scripts/prepare-do-specs.mjs read the ambient git state, and test:deploy
+      # exercises them: from a detached HEAD the "named release branch" guard
+      # fires before the branch-mismatch one the test targets, so the test sees
+      # the wrong message and fails.
+      #
+      # Naming the branch keeps the merge-commit semantics AND lets the test
+      # reach the guard it asserts on. Nothing is relaxed — both guards still
+      # run, and a real deploy checkout is on a named branch anyway.
+      #
+      # Follow-up: the test asserts on ambient git state, which is the actual
+      # defect. gitOutput() in that script is hardcoded to cwd: repoRoot, so the
+      # test cannot point it at a scratch repository without changing the script.
+      - name: Name the checkout for the release git-check
+        run: git switch --force-create ci-release-source
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:

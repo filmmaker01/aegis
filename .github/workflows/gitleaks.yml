@@ -16,3 +16,10 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITLEAKS_CONFIG: .gitleaks.toml
+          # Required by gitleaks-action for pull_request events: it calls the
+          # API to list the PR's commits. Without it the scan passed on push and
+          # failed on every PR — invisible until this repository got its first
+          # PR. This is the ephemeral token GitHub mints per run, not a secret we
+          # store; GITLEAKS_LICENSE is not needed because the owner is a User,
+          # not an Organization.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
