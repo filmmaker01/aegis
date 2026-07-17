@@ -1,0 +1,52 @@
+# Caddy fronts the bot. It is the only service with published ports.
+#
+# Automatic HTTPS: Caddy provisions and renews a Let's Encrypt certificate for
+# {$DOMAIN} on its own. DNS for that name must already point at this VPS before
+# the container starts, or the ACME challenge fails.
+
+{
+	email {$ACME_EMAIL}
+	# Uncomment while testing to avoid burning the Let's Encrypt rate limit.
+	# Certificates issued this way are NOT trusted by browsers or Telegram.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		# This host serves a bot API, never a browser page.
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		-Server
+	}
+
+	# Telegram's webhook. The backend verifies the secret token itself
+	# (X-Telegram-Bot-Api-Secret-Token), so no auth belongs here.
+	handle /telegram/webhook {
+		reverse_proxy backend:3000
+	}
+
+	# Liveness. Cheap and safe to expose: it returns {"status":"ok"} and nothing else.
+	handle /health {
+		reverse_proxy backend:3000
+	}
+
+	# /ready is deliberately NOT exposed: it reports database state and internal
+	# error counters. Reach it from the host instead:
+	#   docker compose -f deploy/compose.prod.yml exec backend \
+	#     bun -e "console.log(await (await fetch('http://127.0.0.1:3000/ready')).text())"
+
+	# Nothing else is a public surface.
+	handle {
+		respond 404
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}

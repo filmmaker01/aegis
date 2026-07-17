@@ -26,6 +26,11 @@ retired archive product and needs rewriting.
   Permanent Telegram errors (bot blocked, chat gone) go straight to `failed` — never retried.
 - **All instants are stored in UTC.** A timezone is applied only when resolving a wall-clock
   intent («сегодня вечером») or rendering. That logic lives in `tasks/domain/schedule.ts`.
+- **The production database is never reached in the clear over an untrusted network.**
+  `env.ts` parses `DATABASE_URL` and accepts it only when TLS is on
+  (`sslmode=require|verify-ca|verify-full`) **or** the host is private (loopback, RFC1918, or a
+  bare Docker service name). A public host without TLS is rejected. Parse the URL — never
+  pattern-match the whole string, or a password can satisfy the check.
 
 ## Product surface
 - Main menu: ➕ Создать задачу · 📋 Мои задачи
@@ -39,6 +44,10 @@ retired archive product and needs rewriting.
   notification), with the Bot API surface behind `modules/telegram`'s public `index.ts`.
 - `api-probe/` — Phase 1 research tool from the retired product. Standalone; **npm/tsx**. Unused.
 - `docs/` — research notes. **Largely stale: describes the retired archive product.**
+- `deploy/` — the production stack: one VPS, Docker Compose (bot + PostgreSQL 17 +
+  Caddy + backup). Runbook in `deploy/README.md`. Postgres has no published port
+  and sits on a network marked `internal: true`; migrations run as a one-shot
+  `migrate` service that the backend waits on, never from the backend's CMD.
 - `.claude/agents/` — the agent team.
 - `tooling/` — local upstream checkouts (git-ignored; never mixed into product code).
 

@@ -92,11 +92,79 @@ function validateBotProductionEnv(env: z.infer<typeof envSchema>, ctx: z.Refinem
   require(env.TASKS_STORE !== 'memory', 'TASKS_STORE', 'must not be "memory" in production (tasks would be lost on restart)')
   require(Boolean(env.TELEGRAM_BOT_TOKEN), 'TELEGRAM_BOT_TOKEN', 'is required in production')
   require(Boolean(env.TELEGRAM_WEBHOOK_SECRET), 'TELEGRAM_WEBHOOK_SECRET', 'is required in production')
-  require(
-    /sslmode=require|supabase\.(co|com)|\.pooler\./i.test(env.DATABASE_URL),
-    'DATABASE_URL',
-    'must use TLS in production (append ?sslmode=require, or use a Supabase/pooler host)',
-  )
+  validateDatabaseUrlTransport(env, ctx)
+}
+
+/**
+ * The database connection must never cross an untrusted network in the clear.
+ *
+ * Two shapes satisfy that, and the check accepts exactly those:
+ *   1. TLS is on (sslmode=require | verify-ca | verify-full);
+ *   2. the host is unreachable from outside the machine or its private network —
+ *      loopback, an RFC1918 address, or a bare hostname, which can only be a
+ *      container/service name on a private Docker network.
+ *
+ * Anything else — a public DNS name or a public IP without TLS — is rejected.
+ *
+ * The URL is PARSED rather than pattern-matched. The previous rule ran a regex
+ * over the whole DATABASE_URL looking for `sslmode=require|supabase\.(co|com)`,
+ * which passed on a mere substring: a password containing "supabase.co" was
+ * enough to satisfy it, and it tied production to one hosting provider. Parsing
+ * the URL is both stricter and provider-agnostic.
+ */
+function validateDatabaseUrlTransport(env: z.infer<typeof envSchema>, ctx: z.RefinementCtx) {
+  let url: URL
+  try {
+    url = new URL(env.DATABASE_URL)
+  } catch {
+    // Fail closed: an unparseable URL is never assumed safe.
+    ctx.addIssue({
+      code: 'custom',
+      path: ['DATABASE_URL'],
+      message: 'must be a valid connection URL so its transport can be verified in production',
+    })
+    return
+  }
+
+  const sslmode = url.searchParams.get('sslmode')?.toLowerCase()
+  if (sslmode === 'require' || sslmode === 'verify-ca' || sslmode === 'verify-full') return
+  if (isPrivateDbHost(url.hostname)) return
+
+  ctx.addIssue({
+    code: 'custom',
+    path: ['DATABASE_URL'],
+    message:
+      'must not reach a public database host without TLS in production. ' +
+      'Use sslmode=require (or verify-ca/verify-full), or keep the database on a private network ' +
+      '(loopback, an RFC1918 address, or a Docker service name).',
+  })
+}
+
+/**
+ * Is this host confined to the machine or a private network?
+ *
+ * `hostname` comes from the URL parser, so an IPv6 literal arrives bracketed.
+ * Only ::1 is accepted among IPv6 addresses: any other IPv6 literal is treated
+ * as public, because a colon-bearing host would otherwise slip through the
+ * "no dot means a container name" rule below.
+ */
+function isPrivateDbHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
+
+  if (host === 'localhost') return true
+  if (host === '::1') return true
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(host)) return true
+  if (/^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)) return true
+
+  // Any remaining IPv6 literal is public.
+  if (host.includes(':')) return false
+  // A name with no dot is not resolvable on the public internet: on this stack it
+  // is a Docker service name (`postgres`, `db`) on a network marked internal.
+  if (!host.includes('.')) return true
+
+  return false
 }
 
 export type AppEnv = z.infer<typeof envSchema>

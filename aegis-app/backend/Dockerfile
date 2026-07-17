@@ -26,6 +26,18 @@ WORKDIR /app/backend
 
 ENV NODE_ENV=production
 
-# Apply pending migrations (prisma migrate deploy, idempotent), then serve.
-# Prisma client is already generated in the build stage.
-CMD ["bun", "run", "start:prod"]
+# Liveness only: is the process still serving? A dead database must NOT mark the
+# container unhealthy — restarting the bot cannot revive Postgres, it would just
+# flap. /ready reports database state and is for monitoring, not for the
+# supervisor. No curl in this image and none added: bun does the request.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD bun -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# Serve only. Migrations are NOT run here: they belong to the one-shot `migrate`
+# service in deploy/compose.prod.yml, which the backend waits on via
+# `condition: service_completed_successfully`. Running `migrate deploy` from this
+# CMD under `restart: unless-stopped` would crash-loop the bot on a bad migration
+# and retry DDL on every restart. `start:prod` (migrate + serve) is kept in
+# package.json for hosts that have no orchestration to express the dependency.
+# The Prisma client is already generated in the build stage.
+CMD ["bun", "run", "start:raw"]

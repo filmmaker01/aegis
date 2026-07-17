@@ -95,21 +95,24 @@ jobs:
       - name: Backend repository tests on a real PostgreSQL
         run: bun run --cwd backend test:pg:local
 
-      # DISABLED — it cannot pass, and not because of this branch.
-      #
-      # backend/Dockerfile sets ENV NODE_ENV=production, so the container boots
-      # production-like and env.ts then demands TELEGRAM_BOT_TOKEN,
-      # TELEGRAM_WEBHOOK_SECRET and a TLS DATABASE_URL. docker-smoke.mjs supplies
-      # none of them, and CI has no production secrets to supply — nor should it.
-      # The compose Postgres cannot serve sslmode=require either.
-      #
-      # Broken since the production env gate was introduced; it went unnoticed
-      # only because this workflow never ran. Re-enable once docker-smoke.mjs
-      # boots the image with a non-production NODE_ENV — the fix belongs in that
-      # script. Do NOT weaken the production env gate to make a smoke test pass.
+      # Re-enabled. It was disabled because the container boots NODE_ENV=production
+      # and the env gate demanded a bot token, a webhook secret and a TLS
+      # DATABASE_URL, none of which CI can or should have. Two changes fixed that
+      # without relaxing the gate: DATABASE_URL now passes because the compose
+      # Postgres is a private host (a public host without TLS is still rejected),
+      # and docker-smoke.mjs supplies throwaway Telegram values that never reach
+      # Telegram — the smoke only probes /health and the auth API.
       - name: Backend Docker smoke
-        if: false
         run: bun run smoke:backend:docker
+
+      # Parses deploy/compose.prod.yml and asserts the invariants whose absence is
+      # silent: a published database port, an internal network that lost
+      # `internal: true`, the postgres:18 volume layout under a 17 server. Then,
+      # since Docker is present on ubuntu-latest, it also runs the real
+      # `docker compose config` for syntax + interpolation. Both live in one
+      # script so `bun run test:deploy` gets the same coverage locally.
+      - name: Production compose invariants
+        run: bun scripts/compose-check.mjs
 
       - name: Install Playwright browser
         run: bun run --cwd webapp e2e:install

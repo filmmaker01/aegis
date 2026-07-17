@@ -1,0 +1,191 @@
+# Production stack for the Telegram task planner: one VPS, Docker Compose.
+#
+#   caddy      :80/:443 -> backend:3000, automatic HTTPS
+#   backend    the bot. Serves only; it does NOT migrate.
+#   migrate    one-shot: prisma migrate deploy, then exits 0
+#   postgres   PostgreSQL 17, no published ports, named volume
+#   backup     daily pg_dump into its own named volume
+#
+# Networks:
+#   edge      caddy <-> backend (the only path in from the internet)
+#   internal  backend/migrate/backup <-> postgres. `internal: true` means this
+#             network has no gateway to the outside world, so the database is
+#             unreachable from the host and the internet. That isolation — not
+#             TLS — is what protects the plaintext connection to Postgres, and it
+#             is exactly what backend/src/env.ts accepts a bare service name for.
+#
+# Secrets come from a server-side .env next to this file (chmod 600), never git.
+#
+#   docker compose -f deploy/compose.prod.yml --env-file .env up -d
+#
+# Build context is aegis-app: that is the bun workspace root and what
+# backend/Dockerfile expects.
+#
+# Requires Docker Compose v2.17.0 or newer: `depends_on` with
+# `condition: service_completed_successfully` (the one-shot migrate gate) was
+# added in v2.17.0. Check with `docker compose version`. Older releases silently
+# ignore the condition and start the backend before migrations finish.
+
+name: planner
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    # No `ports:`. On purpose. Publishing 5432 would put the database on the
+    # public interface of the VPS; nothing outside `internal` needs to reach it.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      # Production pins PostgreSQL 17. The dev/CI stack
+      # (aegis-app/docker-compose.yml) still runs 18 on purpose — aligning it is a
+      # separate future PR, and test:pg:local already exercises the migrations
+      # against a real 17.6 regardless.
+      #
+      # Explicit: postgres:17 defaults PGDATA to /var/lib/postgresql/data, and the
+      # volume below must land on exactly that path. Mounting the parent
+      # (/var/lib/postgresql) is the postgres:18 layout — with 17 initdb would
+      # write inside the container and the data would vanish on recreate.
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # One-shot. Runs to completion and exits; `backend` waits for exit 0.
+  # Migrations are deliberately NOT in the backend CMD: a failing migration would
+  # otherwise crash-loop the bot under `restart: unless-stopped`, and every
+  # restart would retry DDL. Here a failure stops the rollout, loudly, once.
+  migrate:
+    build:
+      context: ../aegis-app
+      dockerfile: backend/Dockerfile
+    image: planner-backend:${IMAGE_TAG:-latest}
+    restart: "no"
+    command: ["bun", "run", "prisma:deploy"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  backend:
+    build:
+      context: ../aegis-app
+      dockerfile: backend/Dockerfile
+    image: planner-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # No `ports:`. Caddy reaches it over `edge`; the port stays off the host.
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      TASKS_STORE: postgres
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+      COOKIE_SECURE: "true"
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN is required}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:?TELEGRAM_WEBHOOK_SECRET is required}
+      REMINDER_SWEEP_SECONDS: ${REMINDER_SWEEP_SECONDS:-30}
+      REMINDER_MAX_ATTEMPTS: ${REMINDER_MAX_ATTEMPTS:-5}
+      REMINDER_STALLED_AFTER_SECONDS: ${REMINDER_STALLED_AFTER_SECONDS:-300}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - internal
+    # /health, not /ready: this decides whether to RESTART the container. /health
+    # says the process is alive; /ready says the database answers. Restarting the
+    # bot cannot fix a dead database, it would just flap. /ready is for monitoring.
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # certificates — losing this re-issues and burns ACME quota
+      - caddy_config:/config
+    depends_on:
+      - backend
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD", "caddy", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  backup:
+    image: postgres:17-alpine   # pg_dump major MUST match the server (17)
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_MIN_FREE_MB: ${BACKUP_MIN_FREE_MB:-2048}
+      BACKUP_SCHEDULE_HOUR: ${BACKUP_SCHEDULE_HOUR:-3}
+    volumes:
+      - backups:/backups
+      - ./backup:/opt/backup:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    # A sleep-until-the-hour loop instead of cron. Rationale in deploy/README.md:
+    # the alpine image has no crond running by default, cron swallows stdout (so
+    # failures would be invisible to `docker compose logs`), and a loop keeps the
+    # schedule, the logs and the exit codes in one place with nothing extra installed.
+    entrypoint: ["/bin/sh", "/opt/backup/scheduler.sh"]
+    # tini as PID 1 forwards SIGTERM to the shell script (a bare `sh` as PID 1 has
+    # non-standard signal handling); the script's trap + short poll then exit
+    # within a few seconds, well inside this grace period.
+    init: true
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/backup-scheduler-alive"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  edge:
+    driver: bridge
+  internal:
+    driver: bridge
+    # No route out, no route in. The database lives here.
+    internal: true
+
+volumes:
+  pgdata:
+  backups:
+  caddy_data:
+  caddy_config:

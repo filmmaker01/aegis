@@ -189,6 +189,19 @@ try {
     'CORS_ORIGINS=http://localhost:45174',
     '-e',
     'COOKIE_SECURE=false',
+    // The image sets NODE_ENV=production, so env.ts applies the production gate:
+    // it wants a bot token and a webhook secret. These are throwaway strings that
+    // never reach Telegram — the smoke only checks /health and the auth API, and
+    // never registers a webhook. Supplying them here is what lets the smoke run
+    // WITHOUT production secrets; weakening the gate to skip them would defeat
+    // the point of having it.
+    '-e',
+    'TELEGRAM_BOT_TOKEN=000000:docker-smoke-not-a-real-token',
+    '-e',
+    'TELEGRAM_WEBHOOK_SECRET=docker-smoke-webhook-secret-not-real',
+    // DATABASE_URL points at the compose Postgres by service name, over the
+    // container network. env.ts accepts that without TLS because the host is
+    // private; a public host would still be rejected.
     imageName,
   ])
 

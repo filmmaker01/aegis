@@ -20,6 +20,14 @@ was reused as-is.
 All user-facing copy is Russian. Times are stored in UTC and rendered in the user's timezone,
 which is chosen at `/start` and changeable via `/settings`.
 
+## Deployment
+
+One VPS, Docker Compose: bot + PostgreSQL 17 + Caddy + a daily backup. No managed
+database, no provider SDK. Postgres publishes no port and lives on a network
+marked `internal: true`; migrations run as a one-shot service the bot waits on.
+
+Runbook: **[`deploy/README.md`](deploy/README.md)**.
+
 ## Layout
 
 - `aegis-app/` — the product app (bootstrapped from Vibe, Apache-2.0). **bun** monorepo.

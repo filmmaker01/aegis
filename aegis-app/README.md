@@ -28,6 +28,15 @@ What exists now:
 Commands: `/start` `/new` `/tasks` `/today` `/settings` `/cancel`. All copy is Russian; instants
 are stored in UTC and rendered in the user's timezone (picked at `/start`).
 
+## Deployment
+
+Production is a single VPS running Docker Compose: the bot, PostgreSQL 17, Caddy
+and a daily backup. No managed database and no provider SDK — see
+**[`../deploy/README.md`](../deploy/README.md)** for the full runbook.
+
+`fly.toml` and `.do/` from the earlier Fly.io / DigitalOcean hosting are left in
+place unchanged.
+
 ## ⚠️ Two required cutover steps
 
 **1. Re-register the webhook.** The bot's live registration still carries the Business-era
